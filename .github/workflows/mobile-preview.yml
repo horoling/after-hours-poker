@@ -14,7 +14,7 @@ permissions:
   deployments: write
 
 concurrency:
-  group: tongzhuo-mobile-integration-preview
+  group: tongzhuo-mobile-integration-preview-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:

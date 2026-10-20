@@ -26,6 +26,52 @@ STREETS = ["翻牌前", "翻牌", "转牌", "河牌"]
 MAX_PLAYERS = 11
 
 
+def hand_positions(hand):
+    """Names follow the hand's actual players, not the room's seat limit."""
+    if not hand:
+        return {}
+    count = len(hand["seats"])
+    labels = {
+        2: ["BB", "D / SB"],
+        3: ["SB", "BB", "D"],
+        4: ["SB", "BB", "UTG", "D"],
+        5: ["SB", "BB", "UTG", "CO", "D"],
+        6: ["SB", "BB", "UTG", "HJ", "CO", "D"],
+        7: ["SB", "BB", "UTG", "UTG+1", "HJ", "CO", "D"],
+        8: ["SB", "BB", "UTG", "UTG+1", "MP", "HJ", "CO", "D"],
+        9: ["SB", "BB", "UTG", "UTG+1", "MP", "LJ", "HJ", "CO", "D"],
+        10: ["SB", "BB", "UTG", "UTG+1", "UTG+2", "MP", "LJ", "HJ", "CO", "D"],
+        11: ["SB", "BB", "UTG", "UTG+1", "UTG+2", "MP", "MP+1", "LJ", "HJ", "CO", "D"],
+    }[count]
+    return dict(zip(hand["seats"], labels))
+
+
+def betting_options(state):
+    """Pot raises use the pot AFTER calling and include the player's street bet.
+
+    Example: 1/2 blinds, first player facing 2 into a pot of 3: call first,
+    then raise by half of 5 (rounded up) -> total 5; a pot raise -> total 7.
+    Presets clamp to the legal range, including a short all-in maximum.
+    """
+    actor = state.actor_index
+    call = state.checking_or_calling_amount
+    can_raise = state.can_complete_bet_or_raise_to()
+    minimum = state.min_completion_betting_or_raising_to_amount
+    maximum = state.max_completion_betting_or_raising_to_amount
+    half = pot = all_in = None
+    if can_raise:
+        base = state.bets[actor] + call
+        called_pot = state.total_pot_amount + call
+        half = max(minimum, min(maximum, base + (called_pot + 1) // 2))
+        pot = max(minimum, min(maximum, base + called_pot))
+        all_in = dict(kind="raise", amount=maximum)
+    elif call > 0 and call == state.stacks[actor]:
+        all_in = dict(kind="call", amount=None)
+    return dict(call=call, fold=state.can_fold(), min_raise=minimum,
+                max_raise=maximum, can_raise=can_raise,
+                half_pot_to=half, pot_to=pot, all_in=all_in)
+
+
 class RoomError(Exception):
     def __init__(self, message, status=400):
         self.message, self.status = message, status
@@ -228,15 +274,17 @@ def view(room, player, state=None):
     if hand is not None and state is None:
         state = build_state(hand)
     seat_to_index = {seat: i for i, seat in enumerate(hand["seats"])} if hand else {}
+    positions = hand_positions(hand)
     seats = []
     for p in sorted(room["players"], key=lambda x: x["seat"]):
         item = {k: p[k] for k in ("id", "name", "seat", "stack", "buyin")}
         item.update(online=time.time() - p["seen"] < 20, cards=[], bet=0,
-                    status="等待入局", delta=None)
+                    status="等待入局", delta=None, position=None)
         i = seat_to_index.get(p["seat"])
         if hand and hand["player_ids"].get(str(p["seat"])) != p["id"]:
             i = None
         if i is not None:
+            item["position"] = positions[p["seat"]]
             # Own cards are retained even after folding; other cards only become
             # public if PokerKit explicitly showed them at showdown.
             own = p["id"] == player["id"]
@@ -253,10 +301,7 @@ def view(room, player, state=None):
     legal = None
     actor_seat = hand["seats"][state.actor_index] if state and state.actor_index is not None else None
     if state and state.status and actor_seat == player["seat"] and not room["paused"]:
-        legal = dict(call=state.checking_or_calling_amount, fold=state.can_fold(),
-                     min_raise=state.min_completion_betting_or_raising_to_amount,
-                     max_raise=state.max_completion_betting_or_raising_to_amount,
-                     can_raise=state.can_complete_bet_or_raise_to())
+        legal = betting_options(state)
     return dict(code=room["code"], invite=room["invite"], me=player["id"],
                 owner=room["owner"], settings=room["settings"], players=seats,
                 version=room["version"], paused=room["paused"],
@@ -291,7 +336,7 @@ def create_room():
     player, token = new_player(data.get("name"), 0, 1000)
     code = secrets.token_hex(5).upper()
     room = dict(code=code, invite=secrets.token_urlsafe(24), owner=player["id"],
-                players=[player], settings=dict(sb=5, bb=10, starting_stack=1000, turn_seconds=0,
+                players=[player], settings=dict(sb=1, bb=2, starting_stack=1000, turn_seconds=0,
                                                 max_players=capacity),
                 version=1, hand=None, dealer=-1, paused=False, history=[])
     with transaction() as (conn, _):

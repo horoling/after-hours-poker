@@ -19,6 +19,8 @@ class PrivateRoomTests(unittest.TestCase):
         self.code = result["room"]["code"]
         self.invite = result["room"]["invite"]
         self.tokens = [result["token"]]
+        # Existing rule fixtures use 5/10; new room defaults are tested separately.
+        self.req("settings", sb=5, bb=10, starting_stack=1000, turn_seconds=0)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -342,6 +344,97 @@ class PrivateRoomTests(unittest.TestCase):
         for i in range(2):
             own=self.req(player=i).get_json()
             self.assertEqual(len(own["players"][i]["cards"]),2)
+
+    def test_new_room_defaults_are_one_two_without_ante(self):
+        result=self.client.post("/api/rooms",json={"name":"默认规则"}).get_json()
+        self.assertEqual(result["room"]["settings"]["sb"],1)
+        self.assertEqual(result["room"]["settings"]["bb"],2)
+        self.req("settings",sb=1,bb=2,starting_stack=1000,turn_seconds=0)
+        self.join()
+        state=self.start()
+        self.assertEqual(state["pot"],3)
+        self.assertEqual(sum(p["stack"]+p["bet"] for p in state["players"]),6000)
+
+    def test_pot_presets_include_call_and_current_street_bet(self):
+        self.req("settings",sb=1,bb=2,starting_stack=1000,turn_seconds=0)
+        self.join(2)
+        self.start()
+        state=self.req().get_json()  # button acts first in a three-player hand
+        self.assertEqual(state["actor_seat"],0)
+        self.assertEqual(state["legal"]["half_pot_to"],5)  # 2 + ceil((3+2)/2)
+        self.assertEqual(state["legal"]["pot_to"],7)       # 2 + (3+2)
+        self.action("call")
+        small_blind=self.req(player=1).get_json()["legal"]
+        self.assertEqual(small_blind["half_pot_to"],5)    # existing SB 1 + call 1 + half 6
+        self.assertEqual(small_blind["pot_to"],8)
+        self.action("call")
+        self.action("call")
+        flop=self.req(player=1).get_json()["legal"]
+        self.assertEqual(flop["call"],0)
+        self.assertEqual(flop["half_pot_to"],3)
+        self.assertEqual(flop["pot_to"],6)
+
+    def test_pot_presets_clamp_to_min_raise_and_short_allin(self):
+        self.join(2)
+        self.start()
+        self.action("raise",40)
+        state=self.req(player=1).get_json()
+        self.assertGreaterEqual(state["legal"]["half_pot_to"],state["legal"]["min_raise"])
+        self.assertLessEqual(state["legal"]["pot_to"],state["legal"]["max_raise"])
+        self.play_calls()
+        self.stacks([12,1000,1000])
+        self.start()
+        # Locate the short player when they are the actor and check legal presets.
+        while self.req().get_json()["actor_seat"] != 0:
+            self.action("call")
+        short=self.req().get_json()["legal"]
+        self.assertTrue(short["can_raise"])
+        self.assertEqual(short["half_pot_to"],12)
+        self.assertEqual(short["pot_to"],12)
+        self.action("raise",short["half_pot_to"])
+
+    def test_allin_call_available_when_raise_not_allowed(self):
+        self.join(2)
+        self.stacks([1000,8,1000])
+        self.start()
+        self.action("call")
+        short=self.req(player=1).get_json()["legal"]
+        self.assertFalse(short["can_raise"])
+        self.assertEqual(short["all_in"],{"kind":"call","amount":None})
+        self.assertIsNone(short["half_pot_to"])
+        self.action("call")
+
+    def test_no_allin_raise_when_short_raise_does_not_reopen(self):
+        self.join(2)
+        self.stacks([1000,25,1000])
+        self.start()
+        self.action("raise",20)
+        self.action("raise",25)
+        self.action("call")
+        legal=self.req().get_json()["legal"]
+        self.assertFalse(legal["can_raise"])
+        self.assertIsNone(legal["half_pot_to"])
+        self.assertIsNone(legal["pot_to"])
+        self.assertIsNone(legal["all_in"])
+
+    def test_positions_follow_real_hand_and_button_rotation(self):
+        self.capacity(11)
+        self.join(5)
+        state=self.start()  # an eleven-seat room with six participants
+        self.assertEqual([p["position"] for p in state["players"]],["D","SB","BB","UTG","HJ","CO"])
+        self.play_calls()
+        state=self.start()
+        self.assertEqual([p["position"] for p in state["players"]],["CO","D","SB","BB","UTG","HJ"])
+        self.action("fold")
+        state=self.req().get_json()
+        self.assertEqual(state["players"][4]["position"],"UTG")
+        joined=self.client.post(f"/api/rooms/{self.code}/join",json={"name":"中途加入","invite":self.invite}).get_json()
+        self.assertIsNone(joined["room"]["players"][-1]["position"])
+
+    def test_heads_up_position_combines_dealer_and_small_blind(self):
+        self.join(1)
+        state=self.start()
+        self.assertEqual([p["position"] for p in state["players"]],["D / SB","BB"])
 
 
 if __name__ == "__main__":

@@ -7,7 +7,9 @@ const num = value => Number(value).toLocaleString("zh-CN");
 const signed = value => `${value > 0 ? "+" : ""}${num(value)}`;
 const hide = (id, hidden) => $(id).classList.toggle("hidden", hidden);
 const SUITS = {s:"♠",h:"♥",d:"♦",c:"♣"};
+const POSITION_NAMES = {"D":"庄家 / BTN","SB":"小盲","BB":"大盲","D / SB":"庄家兼小盲","UTG":"枪口位","UTG+1":"枪口后第一位","UTG+2":"枪口后第二位","MP":"中位","MP+1":"中位后第一位","LJ":"Lojack","HJ":"Hijack","CO":"Cutoff"};
 let snapshot = null, busy = false, polling = false, pollTimer, toastTimer;
+let sizingTurn = "", selectedRaise = null, selectedPreset = "", allInCall = false;
 let serverOffset = 0, savedSettings = "", connectionOK = true;
 let code = location.pathname.match(/^\/rooms\/([A-F0-9]{10})$/)?.[1] || null;
 let invite = new URLSearchParams(location.hash.slice(1)).get("invite") || "";
@@ -75,7 +77,7 @@ function renderSeats() {
     return `<div class="seat${mine ? " mine" : ""}${turn ? " turn" : ""}${p.status === "已弃牌" ? " folded" : ""}" style="left:${x}%;top:${y}%">
       ${p.bet ? `<span class="seat-bet">● ${num(p.bet)}</span>` : ""}
       ${snapshot.dealer === seat && snapshot.hand_number ? '<span class="dealer" title="庄家">D</span>' : ""}
-      <div class="seat-info"><div class="seat-name"><i class="seat-online${p.online ? "" : " away"}"></i>${esc(p.name)}${mine ? ' <span class="you">你</span>' : ""}${p.id === snapshot.owner ? " ♛" : ""}</div><div class="seat-stack">${num(p.stack)}</div><div class="seat-status">${esc(snapshot.phase === "lobby" ? "已入座" : lastActions.get(seat) || status)}${esc(delta)}</div></div>
+      <div class="seat-info">${p.position ? `<div class="seat-position" title="${esc(POSITION_NAMES[p.position] || p.position)}">${esc(p.position)}</div>` : ""}<div class="seat-name"><i class="seat-online${p.online ? "" : " away"}"></i>${esc(p.name)}${mine ? ' <span class="you">你</span>' : ""}${p.id === snapshot.owner ? " ♛" : ""}</div><div class="seat-stack">${num(p.stack)}</div><div class="seat-status">${esc(snapshot.phase === "lobby" ? "已入座" : lastActions.get(seat) || status)}${esc(delta)}</div></div>
       <div class="seat-cards">${snapshot.phase === "lobby" || p.status === "等待入局" ? "" : p.cards.length ? p.cards.map(c => card(c)).join("") : card(null,true)+card(null,true)}</div>
     </div>`;
   }).join("");
@@ -96,23 +98,24 @@ function renderLog() {
 function renderActions() {
   const me = myPlayer(), isHost = snapshot.me === snapshot.owner, active = snapshot.phase === "playing";
   hide("betActions", !snapshot.legal);
+  $("actionPanel").classList.toggle("your-turn", Boolean(snapshot.legal));
   hide("startBtn", active || !isHost);
   $("startBtn").textContent = snapshot.hand_number ? "开始下一手 →" : "朋友入座了，开始第一手 →";
   if (snapshot.legal) {
     const legal = snapshot.legal;
-    $("callBtn").textContent = legal.call ? `${legal.call >= me.stack ? "全下跟注" : "跟注"} ${num(legal.call)}` : "过牌";
-    $("foldBtn").disabled = !legal.fold;
-    $("raiseForm").classList.toggle("hidden", !legal.can_raise);
-    if (legal.can_raise) {
-      const input = $("raiseAmount"), signature = `${snapshot.hand_number}:${snapshot.actions.length}`;
-      input.min = legal.min_raise;
-      input.max = legal.max_raise;
-      if (input.dataset.turn !== signature) {
-        input.value = legal.min_raise;
-        input.dataset.turn = signature;
-      }
-      $("raiseHelp").textContent = `加注至 ${num(legal.min_raise)}–${num(legal.max_raise)}，包含本轮已投入筹码。`;
-    } else $("raiseHelp").textContent = "当前不能再次加注，可跟注或弃牌。";
+    $("callLabel").textContent = legal.call ? `${legal.call >= me.stack ? "全下跟注" : "跟注"} ${num(legal.call)}` : "过牌";
+    const signature = `${snapshot.hand_number}:${snapshot.actions.length}:${snapshot.me}`;
+    if (sizingTurn !== signature) {
+      sizingTurn = signature;
+      selectedRaise = legal.can_raise ? legal.min_raise : null;
+      selectedPreset = "";
+      allInCall = false;
+      $("raiseAmount").value = selectedRaise ?? "";
+    }
+    $("halfPotAmount").textContent = legal.can_raise ? `至 ${num(legal.half_pot_to)}` : "当前不可加注";
+    $("potAmount").textContent = legal.can_raise ? `至 ${num(legal.pot_to)}` : "当前不可加注";
+    $("allinAmount").textContent = legal.all_in ? legal.all_in.kind === "call" ? `跟注 ${num(legal.call)}` : `至 ${num(legal.all_in.amount)}` : "当前不可全下";
+    renderSizing();
   }
   let message = "";
   if (snapshot.paused) message = "牌局已暂停，等待房主继续。";
@@ -131,13 +134,72 @@ function renderActions() {
   $("settingsForm").querySelectorAll("input,select,button").forEach(el => { el.disabled = active; });
   updateEnabled();
 }
+
+function renderSizing(forceAmount = false) {
+  const legal = snapshot?.legal;
+  if (!legal) return;
+  hide("raiseForm", !legal.can_raise && !allInCall);
+  hide("raiseSizing", !legal.can_raise);
+  hide("amountField", !legal.can_raise);
+  $("raiseAmount").required = legal.can_raise;
+  if (legal.can_raise) {
+    const input = $("raiseAmount"), slider = $("raiseSlider");
+    input.min = slider.min = legal.min_raise;
+    input.max = slider.max = legal.max_raise;
+    selectedRaise = Math.max(legal.min_raise, Math.min(legal.max_raise, selectedRaise));
+    slider.value = selectedRaise;
+    slider.setAttribute("aria-valuetext", `本轮加注至 ${num(selectedRaise)}`);
+    if (forceAmount || document.activeElement !== input) input.value = selectedRaise;
+    $("selectedRaise").textContent = num(selectedRaise);
+    $("raiseMinimum").textContent = `最小 ${num(legal.min_raise)}`;
+    $("raiseMaximum").textContent = `全下 ${num(legal.max_raise)}`;
+    $("raiseLabel").textContent = selectedRaise === legal.max_raise ? `确认全下至 ${num(selectedRaise)}` : `加注至 ${num(selectedRaise)}`;
+    $("raiseBtn").classList.toggle("all-in-confirm", selectedRaise === legal.max_raise);
+    $("raiseHelp").textContent = "金额包含本轮已投入筹码。按钮和滑杆只选金额，确认后下注；½ 底池按跟注后的底池计算，筹码取整并遵守最小加注。";
+  } else {
+    $("raiseLabel").textContent = `确认全下跟注 ${num(legal.call)}`;
+    $("raiseBtn").classList.toggle("all-in-confirm", allInCall);
+    $("raiseHelp").textContent = legal.all_in ? "筹码不足完整跟注时，可全下跟注。" : "当前未开放加注权，可跟注或弃牌。";
+  }
+  for (const [id, preset] of [["halfPotBtn","half"],["potBtn","pot"],["allinBtn","allin"]]) {
+    $(id).setAttribute("aria-pressed", String(selectedPreset === preset));
+  }
+}
+
+function selectPreset(preset) {
+  const legal = snapshot?.legal;
+  if (!legal || busy || !connectionOK) return;
+  if (preset === "allin" && legal.all_in) {
+    allInCall = legal.all_in.kind === "call";
+    selectedRaise = allInCall ? null : legal.all_in.amount;
+  } else if (legal.can_raise && (preset === "half" || preset === "pot")) {
+    allInCall = false;
+    selectedRaise = preset === "half" ? legal.half_pot_to : legal.pot_to;
+  } else return;
+  selectedPreset = preset;
+  renderSizing(true);
+  updateEnabled();
+}
+
+function confirmRaise() {
+  const legal = snapshot?.legal;
+  if (!legal || busy || !connectionOK || $("raiseBtn").disabled) return;
+  if (allInCall && legal.all_in?.kind === "call") return send("act",{kind:"call"});
+  if (!legal.can_raise || !$("raiseForm").reportValidity()) return;
+  return send("act",{kind:"raise",amount:Number($("raiseAmount").value)});
+}
+
 function updateEnabled() {
   if (!snapshot) return;
   const active = snapshot.phase === "playing", blocked = busy || !connectionOK;
   $("startBtn").disabled = blocked || snapshot.players.filter(p=>p.stack>0).length < 2;
   $("foldBtn").disabled = blocked || !snapshot.legal?.fold;
   $("callBtn").disabled = blocked || !snapshot.legal;
-  $("raiseBtn").disabled = $("allinBtn").disabled = blocked || !snapshot.legal?.can_raise;
+  const legal = snapshot.legal;
+  $("halfPotBtn").disabled = $("potBtn").disabled = blocked || !legal?.can_raise;
+  $("allinBtn").disabled = blocked || !legal?.all_in;
+  $("raiseSlider").disabled = blocked || !legal?.can_raise;
+  $("raiseBtn").disabled = blocked || !(allInCall && legal?.all_in?.kind === "call" || legal?.can_raise && $("raiseAmount").checkValidity());
   $("rebuyBtn").disabled = $("leaveBtn").disabled = blocked || active;
   $("pauseBtn").disabled = blocked;
 }
@@ -244,8 +306,36 @@ $("closeInvite").addEventListener("click",()=>$("inviteDialog").close());
 $("startBtn").addEventListener("click",()=>send("start"));
 $("foldBtn").addEventListener("click",()=>send("act",{kind:"fold"}));
 $("callBtn").addEventListener("click",()=>send("act",{kind:"call"}));
-$("allinBtn").addEventListener("click",()=>send("act",{kind:"raise",amount:snapshot.legal.max_raise}));
-$("raiseForm").addEventListener("submit",event=>{event.preventDefault();send("act",{kind:"raise",amount:Number($("raiseAmount").value)});});
+$("halfPotBtn").addEventListener("click",()=>selectPreset("half"));
+$("potBtn").addEventListener("click",()=>selectPreset("pot"));
+$("allinBtn").addEventListener("click",()=>selectPreset("allin"));
+$("raiseForm").addEventListener("submit",event=>{event.preventDefault();confirmRaise();});
+$("raiseSlider").addEventListener("input",()=>{
+  selectedRaise = Number($("raiseSlider").value);
+  allInCall = false; selectedPreset = "";
+  renderSizing(true); updateEnabled();
+});
+$("raiseAmount").addEventListener("input",()=>{
+  if ($("raiseAmount").checkValidity()) {
+    selectedRaise = Number($("raiseAmount").value);
+    allInCall = false; selectedPreset = "";
+    renderSizing();
+  }
+  updateEnabled();
+});
+document.addEventListener("keydown",event=>{
+  if (event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || document.hidden || !snapshot?.legal || busy || !connectionOK || document.querySelector("dialog[open]")) return;
+  const target = event.target;
+  if (target instanceof Element && target.closest("input,select,textarea,a,summary,[contenteditable]")) return;
+  const actions = {
+    f:()=>{if (!$("foldBtn").disabled)$("foldBtn").click();},
+    c:()=>{if (!$("callBtn").disabled)$("callBtn").click();},
+    "1":()=>selectPreset("half"), "2":()=>selectPreset("pot"),
+    a:()=>selectPreset("allin"), r:confirmRaise,
+  };
+  const action = actions[event.key.toLowerCase()];
+  if (action) {event.preventDefault();action();}
+});
 $("pauseBtn").addEventListener("click",()=>send("pause"));
 $("rebuyBtn").addEventListener("click",()=>send("rebuy"));
 $("leaveBtn").addEventListener("click",()=>send("leave"));
