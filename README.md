@@ -51,6 +51,12 @@ node --check web/friends.js
 
 GitHub 仓库只保存源码；上传代码不会自动提供公网游戏地址。当前服务需部署到持续在线的主机。
 
+### 临时手机联机测试
+
+仓库的 **Actions → Mobile integration preview → Run workflow** 可启动 5–60 分钟的手动联机测试。流程先运行测试，再在一次性 GitHub runner 上用全新数据库启动服务，通过 Cloudflare Quick Tunnel 提供 HTTPS 地址。就绪后的地址显示在仓库 Deployments 的 `mobile-integration-test` 环境以及运行摘要中。
+
+此功能只用于开发阶段的手机与浏览器集成测试，不是常驻托管。结束或取消运行后，测试牌局清空；重新运行会关闭上一次测试。它不会读取或上传本机房间和底牌数据。Cloudflare 临时域名在各地网络的可达性仍需实际验证。
+
 ## 当前限制
 
 - 原型面向朋友间虚拟筹码娱乐，尚未经过商业平台级审计或长时间公网验证。

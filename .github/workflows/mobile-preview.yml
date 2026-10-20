@@ -1,0 +1,109 @@
+name: Mobile integration preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Temporary phone/browser test duration (5–60 minutes)"
+        required: true
+        default: "60"
+        type: string
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: tongzhuo-mobile-integration-preview
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install and test the project
+        run: |
+          python -m pip install -r requirements-multiplayer.txt
+          python -m unittest discover -s tests -v
+          node --check web/friends.js
+      - name: Install verified Cloudflare client
+        run: |
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/cloudflared" https://github.com/cloudflare/cloudflared/releases/download/2026.10.2/cloudflared-linux-amd64
+          echo "35fbdd2beb378436c7da377d7358cea8e33f9c94a6705d1d8036bf9b0d6d8005  $RUNNER_TEMP/cloudflared" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/cloudflared"
+      - name: Start empty development preview
+        env:
+          PREVIEW_MINUTES: ${{ inputs.minutes }}
+        run: |
+          python scripts/mobile_preview.py --minutes "$PREVIEW_MINUTES" --cloudflared "$RUNNER_TEMP/cloudflared" --metadata-file "$RUNNER_TEMP/preview.json" > "$RUNNER_TEMP/preview-control.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/preview.pid"
+          for attempt in $(seq 1 180); do
+            if [ -s "$RUNNER_TEMP/preview.json" ]; then break; fi
+            if ! kill -0 "$(cat "$RUNNER_TEMP/preview.pid")" 2>/dev/null; then
+              cat "$RUNNER_TEMP/preview-control.log"
+              exit 1
+            fi
+            sleep 2
+          done
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads((Path(os.environ['RUNNER_TEMP']) / 'preview.json').read_text())
+          print('PREVIEW_READY ' + json.dumps(data))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"## Temporary mobile integration test\n\n[Open the private-table lobby]({data['url']}/friends)\n\nExpires at **{data['expires_at']}** (UTC).\n\nCreate a new room and share its full invitation link. This is an empty disposable test instance; all test games disappear when this run ends. Restarting this workflow stops the previous preview.\n")
+          PY
+      - name: Publish the verified test address
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          folder = Path(os.environ['RUNNER_TEMP'])
+          data = json.loads((folder / 'preview.json').read_text())
+          repo = os.environ['GITHUB_REPOSITORY']
+          def post(path, payload):
+              result = subprocess.run(['gh', 'api', '--method', 'POST', path, '--input', '-'], input=json.dumps(payload), text=True, capture_output=True, check=True)
+              return json.loads(result.stdout)
+          deployment = post(f'repos/{repo}/deployments', {'ref': os.environ['GITHUB_SHA'], 'auto_merge': False, 'required_contexts': [], 'environment': 'mobile-integration-test', 'transient_environment': True, 'production_environment': False, 'description': 'Disposable phone/browser integration test'})
+          (folder / 'preview-deployment.txt').write_text(str(deployment['id']))
+          post(f"repos/{repo}/deployments/{deployment['id']}/statuses", {'state': 'success', 'environment_url': data['url'] + '/friends', 'description': 'Test expires ' + data['expires_at'], 'log_url': f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"})
+          PY
+      - name: Keep the manual integration test available
+        run: |
+          python - <<'PY'
+          from datetime import datetime
+          import json, os, time
+          from pathlib import Path
+          folder = Path(os.environ['RUNNER_TEMP'])
+          expiry = datetime.fromisoformat(json.loads((folder / 'preview.json').read_text())['expires_at']).timestamp()
+          pid = int((folder / 'preview.pid').read_text())
+          while time.time() < expiry:
+              try:
+                  os.kill(pid, 0)
+              except ProcessLookupError:
+                  print((folder / 'preview-control.log').read_text())
+                  if time.time() < expiry - 5:
+                      raise SystemExit('Preview stopped before its expiry.')
+                  break
+              time.sleep(2)
+          PY
+      - name: Stop preview processes
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f "$RUNNER_TEMP/preview.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/preview.pid")" 2>/dev/null || true
+          fi
+          if [ -f "$RUNNER_TEMP/preview-deployment.txt" ]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$(cat "$RUNNER_TEMP/preview-deployment.txt")/statuses" -f state=inactive -f description='Temporary integration test finished'
+          fi
