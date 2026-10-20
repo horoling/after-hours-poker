@@ -1,0 +1,15 @@
+services:
+  poker:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8780:8780"
+    volumes:
+      - poker-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8780/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  poker-data:

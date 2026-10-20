@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!requirements-multiplayer.txt
+!private_rooms.py
+!multiplayer_app.py
+!web/
+!web/friends.html
+!web/friends.css
+!web/friends.js

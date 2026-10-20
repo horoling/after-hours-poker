@@ -1,0 +1,31 @@
+__pycache__/
+*.pyc
+.venv/
+data/
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# Runtime data and personal material stay on this computer.
+/.workbuddy/
+/.codex/
+/.agents/
+/hands/
+/models/
+/Negreanu大师课笔记/
+/README-training.local.md
+
+# The GitHub project contains the multiplayer app only.
+/engine/
+/server.py
+/web/*
+!/web/friends.html
+!/web/friends.css
+!/web/friends.js
