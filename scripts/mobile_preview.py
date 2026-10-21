@@ -63,7 +63,7 @@ def main():
                  if key in ("PATH", "HOME", "LANG", "LC_ALL", "SYSTEMROOT", "TMPDIR")}
     child_env["PYTHONUNBUFFERED"] = "1"
     try:
-        with tempfile.TemporaryDirectory(prefix="tongzhuo-preview-") as folder:
+        with tempfile.TemporaryDirectory(prefix="after-hours-preview-") as folder:
             work = Path(folder)
             child_env["ROOMS_DATABASE"] = str(work / "rooms.sqlite3")
             with (work / "server.log").open("wb") as server_log, (work / "tunnel.log").open("wb") as tunnel_log:

@@ -465,7 +465,7 @@ def room_summary(code, kind=None):
         raise RoomError("账单格式不存在。", 404)
     return Response(csv_text(summary, detailed=kind == "hands"),
                     content_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f'attachment; filename="tongzhuo-{code}-{kind}.csv"'})
+                    headers={"Content-Disposition": f'attachment; filename="after-hours-{code}-{kind}.csv"'})
 
 
 @rooms.post("/api/rooms/<code>/<command>")

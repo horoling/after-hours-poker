@@ -619,7 +619,7 @@ class PrivateRoomTests(unittest.TestCase):
         self.assertEqual(report["completed_hands"],1)
         self.assertTrue(all(p["hands_played"]==1 for p in report["players"]))
 
-    def chat(self, text="你好，同桌！", player=0, message_id=None, **extra):
+    def chat(self, text="你好，夜局！", player=0, message_id=None, **extra):
         self.chat_counter=getattr(self,"chat_counter",0)+1
         return self.client.post(f"/api/rooms/{self.code}/chat",json={
             "text":text,"client_id":message_id or f"test-message-{self.chat_counter:06d}",**extra,

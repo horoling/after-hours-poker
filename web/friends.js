@@ -8,6 +8,8 @@ const signed = value => `${value > 0 ? "+" : ""}${num(value)}`;
 const hide = (id, hidden) => $(id).classList.toggle("hidden", hidden);
 const SUITS = {s:"♠",h:"♥",d:"♦",c:"♣"};
 const POSITION_NAMES = {"D":"庄家 / BTN","SB":"小盲","BB":"大盲","D / SB":"庄家兼小盲","UTG":"枪口位","UTG+1":"枪口后第一位","UTG+2":"枪口后第二位","MP":"中位","MP+1":"中位后第一位","LJ":"Lojack","HJ":"Hijack","CO":"Cutoff"};
+// Retain the existing key so the brand rename preserves saved seat credentials.
+const SEAT_STORAGE_KEY="tongzhuo.rooms";
 let snapshot = null, busy = false, polling = false, pollTimer, toastTimer;
 let sizingTurn = "", selectedRaise = null, selectedPreset = "", allInCall = false;
 let serverOffset = 0, savedSettings = "", connectionOK = true;
@@ -20,7 +22,7 @@ let code = location.pathname.match(/^\/rooms\/([A-F0-9]{10})$/)?.[1] || null;
 let invite = new URLSearchParams(location.hash.slice(1)).get("invite") || "";
 let storage = {};
 try {
-  const saved = JSON.parse(localStorage.getItem("tongzhuo.rooms") || "{}");
+  const saved = JSON.parse(localStorage.getItem(SEAT_STORAGE_KEY) || "{}");
   if (saved && typeof saved === "object" && !Array.isArray(saved)) storage = saved;
 } catch (_) { /* Storage may be unavailable. */ }
 let token = code ? storage[code]?.token || "" : "";
@@ -29,7 +31,7 @@ function saveStorage(removedCode=null, removedToken=null) {
   try {
     // Another open room may have saved a seat since this page loaded.
     let saved={};
-    try {saved=JSON.parse(localStorage.getItem("tongzhuo.rooms") || "{}");}
+    try {saved=JSON.parse(localStorage.getItem(SEAT_STORAGE_KEY) || "{}");}
     catch (_) { /* Replace malformed data while preserving any valid current seat. */ }
     const latest=saved && typeof saved==="object" && !Array.isArray(saved) ? saved : {};
     if(removedCode) {
@@ -42,7 +44,7 @@ function saveStorage(removedCode=null, removedToken=null) {
       }
     }
     storage=latest;
-    localStorage.setItem("tongzhuo.rooms", JSON.stringify(storage));
+    localStorage.setItem(SEAT_STORAGE_KEY, JSON.stringify(storage));
   }
   catch (_) { toast("浏览器无法保存座位，关闭页面后可能无法恢复。请允许本地存储。", 10000); }
 }
@@ -280,7 +282,7 @@ function render(next) {
 function updateClock() {
   if (!snapshot) return;
   const actor = snapshot.players.find(p=>p.seat===snapshot.actor_seat);
-  let text = snapshot.session_ended ? "本场已结束 · 总结已保存" : snapshot.paused ? "牌局暂停" : snapshot.phase === "playing" ? `${actor?.name || "玩家"} 行动中` : snapshot.phase === "finished" ? "下一手，继续同桌" : "朋友入座后由房主开局";
+  let text = snapshot.session_ended ? "本场已结束 · 总结已保存" : snapshot.paused ? "牌局暂停" : snapshot.phase === "playing" ? `${actor?.name || "玩家"} 行动中` : snapshot.phase === "finished" ? "下一手，夜局继续" : "朋友入座后由房主开局";
   $("turnNote").textContent = text;
   updateCountdown();
   if ($("summaryDialog").open && sessionReport) updateSessionDuration();
@@ -473,7 +475,7 @@ async function loadSummary() {
 function renderSummary() {
   const r = sessionReport, ended = r.ended_at != null;
   hide("summaryContent", false);
-  $("summaryTitle").textContent = ended ? "今晚同桌 · 赛后总结" : "今晚同桌 · 整场统计";
+  $("summaryTitle").textContent = ended ? "夜局 · 赛后总结" : "夜局 · 整场统计";
   $("summaryStatus").textContent = `${ended ? "最终账单 · 已固定" : "进行中 · 已结算快照"}${r.active ? " · 本手尚未计入" : ""}${r.legacy ? `。旧房间历史不完整：手数、获胜、底池及曲线变化从第 ${r.first_hand} 手起统计；盈亏沿用已有买入账目，时长从统计启用时起算。` : ""}`;
   $("sessionHands").textContent = `${num(r.completed_hands)} 手`;
   $("sessionMaxPot").textContent = r.largest_pot ? num(r.largest_pot.pot) : "—";
@@ -535,7 +537,7 @@ async function exportBill(kind) {
     if (!response.ok) throw new Error((await response.json()).error || "导出失败");
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement("a");
-    link.href=url; link.download=`同桌-${code}-${kind === "summary" ? "总账" : "逐手账单"}.csv`;
+    link.href=url; link.download=`After-Hours-${code}-${kind === "summary" ? "总账" : "逐手账单"}.csv`;
     document.body.append(link); link.click(); link.remove();
     setTimeout(()=>URL.revokeObjectURL(url),60000);
     toast("账单已生成，手机可在下载列表中查看或分享。");

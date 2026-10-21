@@ -1,4 +1,4 @@
-name: Mobile integration preview
+name: After Hours · Mobile preview
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ permissions:
   deployments: write
 
 concurrency:
-  group: tongzhuo-mobile-integration-preview-${{ github.sha }}
+  group: after-hours-mobile-integration-preview-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
