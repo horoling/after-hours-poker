@@ -1,9 +1,12 @@
 """Run with: python -m unittest discover -s tests -v."""
 from concurrent.futures import ThreadPoolExecutor
+import csv
+import io
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import time
 import unittest
+from unittest.mock import patch
 
 from multiplayer_app import create_app
 from private_rooms import build_state, transaction
@@ -435,6 +438,186 @@ class PrivateRoomTests(unittest.TestCase):
         self.join(1)
         state=self.start()
         self.assertEqual([p["position"] for p in state["players"]],["D / SB","BB"])
+
+    def summary(self, client=None):
+        return (client or self.client).get(
+            f"/api/rooms/{self.code}/summary",
+            headers={"Authorization": "Bearer " + self.tokens[0]}).get_json()
+
+    def test_summary_counts_settled_hands_and_split_winners_once(self):
+        self.join(2)
+        before = self.summary()
+        self.assertIsNone(before["started_at"])
+        self.start()
+        self.rig_deck("2h 3h 4h 2d 3d 4d 5c Tc Jc Qc 6c Kc 7c Ac".split())
+        active = self.summary()
+        self.assertTrue(active["active"])
+        self.assertEqual(active["completed_hands"], 0)
+        self.assertEqual(sum(p["net"] for p in active["players"]), 0)
+        self.play_calls()
+        result = self.summary()
+        self.assertEqual(result["completed_hands"], 1)
+        self.assertEqual(result["largest_pot"]["pot"], 30)
+        self.assertTrue(all(p["hands_played"] == p["hands_won"] == 1 for p in result["players"]))
+        self.assertEqual(result["net_total"], 0)
+        self.assertEqual([p["net"] for p in result["players"]], [0,0,0])
+        self.assertTrue(all(p["won"] for p in result["hands"][0]["results"]))
+        # Repeated polls and replays must not duplicate accounting.
+        self.req()
+        self.assertEqual(self.summary()["completed_hands"], 1)
+
+    def test_summary_side_pot_win_and_uncalled_refund(self):
+        self.join(2)
+        self.stacks([300,100,200])
+        self.start()
+        self.rig_deck("As Ks Qs Ah Kh Qh 4c 2c 3d 7h 5c 9s 6c Jc".split())
+        self.action("raise",300)
+        self.play_calls()
+        result = self.summary()
+        players = {p["name"]:p for p in result["players"]}
+        self.assertEqual(result["largest_pot"]["pot"], 500)
+        self.assertEqual(players["房主"]["hands_won"], 0)
+        self.assertEqual(players["玩家 1"]["hands_won"], 1)
+        self.assertEqual(players["玩家 2"]["hands_won"], 1)
+        self.assertEqual(players["玩家 2"]["net"], 0)
+
+    def test_fold_pot_excludes_unmatched_raise_and_winner_counts(self):
+        self.join(2)
+        self.start()
+        self.action("raise",500)
+        self.action("fold")
+        self.action("fold")
+        result = self.summary()
+        self.assertEqual(result["largest_pot"]["pot"], 25)  # SB5 + BB10 + winner's matched10.
+        winner = next(p for p in result["players"] if p["name"] == "房主")
+        self.assertEqual(winner["hands_won"],1)
+        self.assertEqual(winner["net"],15)
+
+    def test_flop_fold_pot_does_not_include_uncalled_flop_bet(self):
+        self.join(1)
+        self.start()
+        self.action("call")
+        self.action("call")
+        self.action("raise",500)
+        self.action("fold")
+        self.assertEqual(self.summary()["largest_pot"]["pot"],20)
+
+    def test_rebuy_leave_and_same_name_rejoin_are_separate_balanced_entries(self):
+        self.join(1)
+        self.start()
+        self.action("fold")
+        before = self.summary()
+        old = next(p for p in before["players"] if p["name"] == "玩家 1")
+        self.req("rebuy", player=1)
+        topped = next(p for p in self.summary()["players"] if p["id"] == old["id"])
+        self.assertEqual(topped["buyin"],2000)
+        self.assertEqual(topped["net"],old["net"])
+        self.req("leave",player=1)
+        after = self.summary()
+        departed = next(p for p in after["players"] if p["id"] == old["id"])
+        self.assertEqual(departed["stack"],0)
+        self.assertEqual(departed["cashout"],topped["stack"])
+        self.assertEqual(departed["status"],"已离桌")
+        self.assertEqual(after["net_total"],0)
+        new = self.client.post(f"/api/rooms/{self.code}/join",json={"name":"玩家 1","invite":self.invite}).get_json()
+        report = self.summary()
+        same_name = [p for p in report["players"] if p["name"] == "玩家 1"]
+        self.assertEqual(len(same_name),2)
+        fresh = next(p for p in same_name if p["id"] != old["id"])
+        self.assertEqual((fresh["net"],fresh["hands_played"],fresh["hands_won"]),(0,0,0))
+        self.assertEqual(report["net_total"],0)
+        self.assertEqual(len({p["entry"] for p in report["players"]}),3)
+        self.assertNotEqual(new["room"]["players"][1]["id"],old["id"])
+
+    def test_late_join_only_counts_dealt_hands_and_renaming_preserves_identity(self):
+        self.join(1)
+        self.start()
+        self.join(1)
+        self.play_calls()
+        result = self.summary()
+        late = next(p for p in result["players"] if p["name"] == "玩家 2")
+        self.assertEqual(late["hands_played"],0)
+        self.req("rename",player=2,name="新的名字")
+        renamed = next(p for p in self.summary()["players"] if p["id"] == late["id"])
+        self.assertEqual(renamed["name"],"新的名字")
+        self.start()
+        self.play_calls()
+        self.assertEqual(next(p for p in self.summary()["players"] if p["id"] == late["id"])["hands_played"],1)
+
+    def test_end_session_requires_host_and_idle_freezes_bill_and_clock(self):
+        self.join(1)
+        self.start()
+        self.assertEqual(self.req("end").status_code,409)
+        self.action("fold")
+        self.assertEqual(self.req("end",player=1).status_code,403)
+        self.assertTrue(self.req("end").get_json()["session_ended"])
+        report = self.summary()
+        self.assertIsNotNone(report["ended_at"])
+        for command in ("start","rebuy","rename","settings","end"):
+            self.assertEqual(self.req(command,name="改名").status_code,409)
+        self.assertEqual(self.client.post(f"/api/rooms/{self.code}/join",json={"name":"迟到","invite":self.invite}).status_code,409)
+        with patch("session_stats.time.time",return_value=time.time()+7200):
+            later=self.summary()
+        self.assertEqual(report["elapsed_seconds"],later["elapsed_seconds"])
+        self.req("leave",player=1)
+        # Leaving after the session end doesn't rewrite the fixed final bill.
+        self.assertEqual(self.summary()["players"],report["players"])
+
+    def test_csv_auth_unicode_formulas_and_no_private_cards(self):
+        self.join(1)
+        self.req("rename",name="=HYPERLINK(1)")
+        self.start()
+        self.action("fold")
+        for endpoint in ("summary","export/summary","export/hands"):
+            self.assertEqual(self.client.get(f"/api/rooms/{self.code}/{endpoint}").status_code,401)
+        headers={"Authorization":"Bearer "+self.tokens[0]}
+        export=self.client.get(f"/api/rooms/{self.code}/export/summary",headers=headers)
+        self.assertEqual(export.status_code,200)
+        self.assertTrue(export.data.startswith(b"\xef\xbb\xbf"))
+        text=export.data.decode("utf-8-sig")
+        rows=list(csv.DictReader(io.StringIO(text)))
+        self.assertIn("'=HYPERLINK(1)",[r["昵称"] for r in rows])
+        self.assertEqual(sum(int(r["净盈亏"]) for r in rows),0)
+        self.assertNotIn("token_hash",text)
+        detail=self.client.get(f"/api/rooms/{self.code}/export/hands",headers=headers)
+        self.assertEqual(len(list(csv.DictReader(io.StringIO(detail.data.decode("utf-8-sig"))))),2)
+        summary=self.summary()
+        self.assertNotIn("deck",str(summary))
+        self.assertNotIn("holes",str(summary))
+        self.assertNotIn("token_hash",str(summary))
+        self.assertEqual(export.headers["Cache-Control"],"no-store")
+
+    def test_full_session_survives_restart_and_recent_history_limit(self):
+        self.join(1)
+        for _ in range(52):
+            self.start()
+            self.action("fold")
+        self.assertEqual(len(self.req().get_json()["history"]),50)
+        before=self.summary()
+        self.assertEqual(before["completed_hands"],52)
+        self.assertEqual(len(before["hands"]),52)
+        self.assertEqual(sum(p["hands_played"] for p in before["players"]),104)
+        new_client=create_app(self.config).test_client()
+        after=self.summary(client=new_client)
+        for key in ("players","hands","largest_pot","started_at"):
+            self.assertEqual(before[key],after[key])
+
+    def test_legacy_room_migration_marks_missing_history_without_inventing_it(self):
+        self.join(1)
+        self.start()
+        self.action("fold")
+        with self.app.app_context(),transaction(self.code) as (_,room):
+            del room["session"]
+        report=self.summary()
+        self.assertTrue(report["legacy"])
+        self.assertEqual(report["first_hand"],2)
+        self.assertEqual(report["completed_hands"],0)
+        self.assertEqual(report["net_total"],0)
+        self.start()
+        self.action("fold")
+        report=self.summary()
+        self.assertEqual(report["completed_hands"],1)
+        self.assertTrue(all(p["hands_played"]==1 for p in report["players"]))
 
 
 if __name__ == "__main__":

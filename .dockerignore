@@ -3,6 +3,7 @@
 !requirements-multiplayer.txt
 !private_rooms.py
 !multiplayer_app.py
+!session_stats.py
 !web/
 !web/friends.html
 !web/friends.css

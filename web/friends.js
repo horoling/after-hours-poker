@@ -11,6 +11,8 @@ const POSITION_NAMES = {"D":"庄家 / BTN","SB":"小盲","BB":"大盲","D / SB":
 let snapshot = null, busy = false, polling = false, pollTimer, toastTimer;
 let sizingTurn = "", selectedRaise = null, selectedPreset = "", allInCall = false;
 let serverOffset = 0, savedSettings = "", connectionOK = true;
+let sessionReport = null, reportBusy = false, chartSelection = null;
+const hiddenCurves = new Set();
 let code = location.pathname.match(/^\/rooms\/([A-F0-9]{10})$/)?.[1] || null;
 let invite = new URLSearchParams(location.hash.slice(1)).get("invite") || "";
 let storage = {};
@@ -99,7 +101,7 @@ function renderActions() {
   const me = myPlayer(), isHost = snapshot.me === snapshot.owner, active = snapshot.phase === "playing";
   hide("betActions", !snapshot.legal);
   $("actionPanel").classList.toggle("your-turn", Boolean(snapshot.legal));
-  hide("startBtn", active || !isHost);
+  hide("startBtn", active || !isHost || snapshot.session_ended);
   $("startBtn").textContent = snapshot.hand_number ? "开始下一手 →" : "朋友入座了，开始第一手 →";
   if (snapshot.legal) {
     const legal = snapshot.legal;
@@ -118,7 +120,8 @@ function renderActions() {
     renderSizing();
   }
   let message = "";
-  if (snapshot.paused) message = "牌局已暂停，等待房主继续。";
+  if (snapshot.session_ended) message = "本场已结束，最终账单已保存。点击「赛后总结」查看或导出，下一场请创建新房间。";
+  else if (snapshot.paused) message = "牌局已暂停，等待房主继续。";
   else if (snapshot.phase === "lobby") message = `已入座 ${snapshot.players.length} / ${snapshot.settings.max_players} 人。${isHost ? "至少两人有筹码即可开局，也可以等朋友到齐。" : "等待房主开局。"}`;
   else if (snapshot.phase === "finished") message = `${me.delta === null ? "本手已结束。" : `本手 ${signed(me.delta)} 筹码。`}${isHost ? "准备好后开始下一手。" : "等待房主开始下一手。"} 可在此时补码或离桌。`;
   else if (me.status === "等待入局") message = "本手已经开始，你将在下一手加入。";
@@ -131,7 +134,7 @@ function renderActions() {
   hide("pauseBtn", !active);
   $("pauseBtn").textContent = snapshot.paused ? "继续牌局" : "暂停牌局";
   $("rebuyBtn").textContent = `补码 +${num(snapshot.settings.starting_stack)}`;
-  $("settingsForm").querySelectorAll("input,select,button").forEach(el => { el.disabled = active; });
+  $("settingsForm").querySelectorAll("input,select,button").forEach(el => { el.disabled = active || snapshot.session_ended; });
   updateEnabled();
 }
 
@@ -192,7 +195,7 @@ function confirmRaise() {
 function updateEnabled() {
   if (!snapshot) return;
   const active = snapshot.phase === "playing", blocked = busy || !connectionOK;
-  $("startBtn").disabled = blocked || snapshot.players.filter(p=>p.stack>0).length < 2;
+  $("startBtn").disabled = blocked || snapshot.session_ended || snapshot.players.filter(p=>p.stack>0).length < 2;
   $("foldBtn").disabled = blocked || !snapshot.legal?.fold;
   $("callBtn").disabled = blocked || !snapshot.legal;
   const legal = snapshot.legal;
@@ -200,13 +203,17 @@ function updateEnabled() {
   $("allinBtn").disabled = blocked || !legal?.all_in;
   $("raiseSlider").disabled = blocked || !legal?.can_raise;
   $("raiseBtn").disabled = blocked || !(allInCall && legal?.all_in?.kind === "call" || legal?.can_raise && $("raiseAmount").checkValidity());
-  $("rebuyBtn").disabled = $("leaveBtn").disabled = blocked || active;
+  $("rebuyBtn").disabled = blocked || active || snapshot.session_ended;
+  $("leaveBtn").disabled = blocked || active;
+  $("renameBtn").disabled = blocked || snapshot.session_ended;
+  $("endSessionBtn").disabled = $("confirmEnd").disabled = blocked || active || snapshot.session_ended;
   $("pauseBtn").disabled = blocked;
 }
 function render(next) {
   // Ignore a slower GET response that predates an accepted local command.
   if (snapshot && next.version < snapshot.version) return;
   const changed = !snapshot || next.version !== snapshot.version;
+  const justEnded = next.session_ended && !snapshot?.session_ended;
   snapshot = next;
   serverOffset = next.server_time * 1000 - Date.now();
   connection(true);
@@ -234,13 +241,114 @@ function render(next) {
     savedSettings = settingsKey;
   }
   renderActions(); updateClock();
+  $("summaryBtn").textContent = next.session_ended ? "赛后总结" : "整场统计";
+  if (justEnded && !$("summaryDialog").open) $("summaryDialog").showModal();
+  if ($("summaryDialog").open && (changed || !sessionReport)) loadSummary();
 }
 function updateClock() {
   if (!snapshot) return;
   const actor = snapshot.players.find(p=>p.seat===snapshot.actor_seat);
-  let text = snapshot.paused ? "牌局暂停" : snapshot.phase === "playing" ? `${actor?.name || "玩家"} 行动中` : snapshot.phase === "finished" ? "下一手，继续同桌" : "朋友入座后由房主开局";
+  let text = snapshot.session_ended ? "本场已结束 · 总结已保存" : snapshot.paused ? "牌局暂停" : snapshot.phase === "playing" ? `${actor?.name || "玩家"} 行动中` : snapshot.phase === "finished" ? "下一手，继续同桌" : "朋友入座后由房主开局";
   if (snapshot.phase === "playing" && !snapshot.paused && snapshot.deadline) text += ` · ${Math.max(0,Math.ceil(snapshot.deadline-(Date.now()+serverOffset)/1000))}s`;
   $("turnNote").textContent = text;
+  if ($("summaryDialog").open && sessionReport) updateSessionDuration();
+}
+
+const REPORT_COLORS = ["#215644", "#b5463b", "#386da6", "#9a6b20", "#8b55a0", "#087e88", "#ad5e83", "#657b24", "#b66127", "#5057b0", "#687b8a"];
+const reportDate = timestamp => timestamp == null ? "未开局" : new Date(timestamp * 1000).toLocaleString("zh-CN", {hour12:false});
+function updateSessionDuration() {
+  const start = sessionReport.started_at;
+  const seconds = start == null ? 0 : Math.max(0, Math.floor((sessionReport.ended_at ?? (Date.now()+serverOffset)/1000) - start));
+  $("sessionDuration").textContent = `${Math.floor(seconds/3600)}:${String(Math.floor(seconds%3600/60)).padStart(2,"0")}:${String(seconds%60).padStart(2,"0")}`;
+}
+async function loadSummary() {
+  if (reportBusy || !snapshot) return;
+  reportBusy = true;
+  let loaded = false;
+  try {
+    const result = await request(`/api/rooms/${code}/summary`);
+    if (!sessionReport || result.version >= sessionReport.version) {
+      sessionReport = result;
+      renderSummary();
+      loaded = true;
+    }
+  } catch (error) { $("summaryStatus").textContent = `读取失败：${error.message} 关闭后重新打开可重试。`; }
+  finally {
+    reportBusy = false;
+    if (loaded && $("summaryDialog").open && snapshot.version > sessionReport.version) loadSummary();
+  }
+}
+function renderSummary() {
+  const r = sessionReport, ended = r.ended_at != null;
+  hide("summaryContent", false);
+  $("summaryTitle").textContent = ended ? "今晚同桌 · 赛后总结" : "今晚同桌 · 整场统计";
+  $("summaryStatus").textContent = `${ended ? "最终账单 · 已固定" : "进行中 · 已结算快照"}${r.active ? " · 本手尚未计入" : ""}${r.legacy ? `。旧房间历史不完整：手数、获胜、底池及曲线变化从第 ${r.first_hand} 手起统计；盈亏沿用已有买入账目，时长从统计启用时起算。` : ""}`;
+  $("sessionHands").textContent = `${num(r.completed_hands)} 手`;
+  $("sessionMaxPot").textContent = r.largest_pot ? num(r.largest_pot.pot) : "—";
+  $("sessionBuyin").textContent = num(r.total_buyin);
+  $("sessionTimes").textContent = `${r.legacy ? "统计起算" : "开始"}：${reportDate(r.started_at)}${ended ? `　结束：${reportDate(r.ended_at)}` : "　从第一手起计时，含暂停"}`;
+  $("rankingTitle").textContent = ended ? "全桌最终盈亏榜" : "全桌当前盈亏榜";
+  $("rankingRows").innerHTML = r.players.map((p,i)=>`<tr><th scope="row"><span class="rank-number">${i+1}</span>${esc(p.name)}${p.id === snapshot.me ? ' <small>你</small>' : ""}<small>#${p.entry} · ${esc(p.status)}</small></th><td class="${p.net>0 ? "positive" : p.net<0 ? "negative" : ""}">${signed(p.net)}</td><td>${num(p.buyin)}</td><td>${num(p.left_at != null ? p.cashout : p.stack)}<small>${p.left_at != null ? "离桌带出" : "桌上筹码"}</small></td><td>${num(p.hands_played)}</td><td>${num(p.hands_won)}</td></tr>`).join("");
+  $("accountingCheck").textContent = `买入 ${num(r.total_buyin)} · 桌上及离桌带出 ${num(r.total_chips)} · 全桌净盈亏 ${signed(r.net_total)}${r.net_total === 0 ? " · 账目平衡" : r.legacy ? " · 旧记录可能缺少此前离桌玩家" : " · 请核对账目"}`;
+  const largest = r.largest_pot;
+  $("largestPotDetail").innerHTML = largest ? `<div class="largest-pot-title">第 ${largest.number} 手 <b>${num(largest.pot)} 筹码</b></div><div class="report-board">${largest.board.map(c=>card(c)).join("") || '<span class="muted">未发公共牌</span>'}</div><p>${largest.results.map(p=>`${esc(p.name)} <b class="${p.delta>0 ? "positive" : p.delta<0 ? "negative" : ""}">${signed(p.delta)}</b>`).join("　")}</p>` : '<p class="muted">完成第一手后，这里会记录最大底池。</p>';
+  hide("endSessionBtn", snapshot.me !== snapshot.owner || ended);
+  $("endSessionHint").textContent = ended ? "账目已固定，可随时导出。开始下一场请新建房间。" : snapshot.me !== snapshot.owner ? "由房主在两手之间结束本场，生成最终账单。" : r.active ? "本手结束后才能结束本场。" : "结束本场后，最终账单固定，不能继续开牌或补码。";
+  updateSessionDuration(); renderProfitChart(); updateEnabled();
+}
+function renderProfitChart() {
+  const r = sessionReport;
+  const first = r.first_hand - 1, last = r.hands.at(-1)?.number ?? first;
+  const slider = $("chartHand");
+  slider.min = first; slider.max = last; slider.disabled = last === first;
+  if (chartSelection != null) chartSelection = Math.max(first, Math.min(last, chartSelection));
+  const selected = chartSelection ?? last;
+  slider.value = selected;
+  $("chartHandLabel").textContent = selected === first ? "统计起点" : `第 ${selected} 手后`;
+  slider.setAttribute("aria-valuetext", $("chartHandLabel").textContent);
+  const series = r.players.map(p=>{
+    const points = [[Math.max(first,p.joined_after_hand),p.baseline_net]];
+    for (const h of r.hands) {
+      const result = h.results.find(result=>result.id===p.id);
+      if (result) points.push([h.number,result.net]);
+    }
+    if (points.at(-1)[0] < last) points.push([last,points.at(-1)[1]]);
+    const value = selected < points[0][0] ? null : points.filter(([x])=>x<=selected).at(-1)?.[1] ?? p.baseline_net;
+    return {player:p, points, value, color:REPORT_COLORS[(p.entry-1)%REPORT_COLORS.length]};
+  });
+  const visible = series.filter(s=>!hiddenCurves.has(s.player.id));
+  let low = 0, high = 0;
+  for (const s of visible) for (const [,value] of s.points) {low=Math.min(low,value);high=Math.max(high,value);}
+  const padding = Math.max(5,(high-low)*.12);
+  const min = low-padding, max = high+padding;
+  const x = n=>64+(n-first)/Math.max(1,last-first)*606;
+  const y = n=>20+(max-n)/(max-min)*200;
+  let svg = '<svg viewBox="0 0 700 260" role="img" aria-label="各玩家已结算的累计净盈亏，横轴为手数，纵轴为筹码"><title>已结算累计盈亏曲线，补码不计盈利</title>';
+  const axisNumber = n=>Math.abs(n)>=1e8 ? `${Number((n/1e8).toFixed(1))}亿` : Math.abs(n)>=1e4 ? `${Number((n/1e4).toFixed(1))}万` : num(n);
+  for (const amount of [high,0,low].filter((v,i,a)=>a.indexOf(v)===i)) svg += `<line x1="64" x2="670" y1="${y(amount)}" y2="${y(amount)}" stroke="#dce2d5" ${amount===0 ? 'stroke-dasharray="5 4"' : ""}/><text x="54" y="${y(amount)+4}" text-anchor="end">${axisNumber(amount)}</text>`;
+  svg += `<text x="64" y="249">${first ? `第 ${first} 手后` : "开局"}</text><text x="670" y="249" text-anchor="end">${last>first ? `第 ${last} 手` : "等待结算"}</text>`;
+  for (const s of visible) {
+    svg += `<polyline points="${s.points.map(([a,b])=>`${x(a)},${y(b)}`).join(" ")}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round"><title>${esc(s.player.name)} #${s.player.entry}</title></polyline>`;
+    if (s.value != null) svg += `<circle cx="${x(selected)}" cy="${y(s.value)}" r="4" fill="${s.color}"/>`;
+  }
+  svg += `<line x1="${x(selected)}" x2="${x(selected)}" y1="20" y2="220" stroke="#7a837b" stroke-dasharray="3 5"/></svg>`;
+  $("profitChart").innerHTML = svg;
+  $("chartLegend").innerHTML = series.map(s=>`<button type="button" data-curve="${s.player.id}" aria-pressed="${!hiddenCurves.has(s.player.id)}" style="--curve-color:${s.color}"><i></i><span>${esc(s.player.name)} <small>#${s.player.entry}</small></span><b>${s.value == null ? "未入座" : signed(s.value)}</b></button>`).join("");
+}
+async function exportBill(kind) {
+  const button = $(kind === "summary" ? "exportSummary" : "exportHands");
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/rooms/${code}/export/${kind}`, {headers:{Authorization:`Bearer ${token}`},cache:"no-store",signal:AbortSignal.timeout(20000)});
+    if (!response.ok) throw new Error((await response.json()).error || "导出失败");
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href=url; link.download=`同桌-${code}-${kind === "summary" ? "总账" : "逐手账单"}.csv`;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    toast("账单已生成，手机可在下载列表中查看或分享。");
+  } catch (error) { toast(error.message); }
+  finally { button.disabled=false; }
 }
 async function poll() {
   if (!code || !token || polling || busy) return;
@@ -303,6 +411,22 @@ $("inviteBtn").addEventListener("click",async()=>{
   catch (_) { $("inviteLink").value=invitationURL(); $("inviteDialog").showModal(); $("inviteLink").select(); }
 });
 $("closeInvite").addEventListener("click",()=>$("inviteDialog").close());
+$("summaryBtn").addEventListener("click",()=>{$("summaryDialog").showModal();loadSummary();});
+$("closeSummary").addEventListener("click",()=>$("summaryDialog").close());
+$("chartHand").addEventListener("input",()=>{chartSelection=Number($("chartHand").value);renderProfitChart();});
+$("chartLegend").addEventListener("click",event=>{
+  const button=event.target.closest("[data-curve]");
+  if (!button) return;
+  const id=button.dataset.curve;
+  if(hiddenCurves.has(id))hiddenCurves.delete(id);else hiddenCurves.add(id);
+  renderProfitChart();
+  $("chartLegend").querySelector(`[data-curve="${id}"]`)?.focus({preventScroll:true});
+});
+$("exportSummary").addEventListener("click",()=>exportBill("summary"));
+$("exportHands").addEventListener("click",()=>exportBill("hands"));
+$("endSessionBtn").addEventListener("click",()=>$("endDialog").showModal());
+$("cancelEnd").addEventListener("click",()=>$("endDialog").close());
+$("confirmEnd").addEventListener("click",async()=>{if(await send("end")){$("endDialog").close();loadSummary();}});
 $("startBtn").addEventListener("click",()=>send("start"));
 $("foldBtn").addEventListener("click",()=>send("act",{kind:"fold"}));
 $("callBtn").addEventListener("click",()=>send("act",{kind:"call"}));

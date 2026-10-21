@@ -15,8 +15,9 @@ import secrets
 import sqlite3
 import time
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request
 from pokerkit import Automation, Card, Deck, NoLimitTexasHoldem
+from session_stats import csv_text, ensure_session, record_settlement, session_summary, sync_players
 
 rooms = Blueprint("private_rooms", __name__)
 AUTOMATIONS = tuple(a for a in Automation if a not in (
@@ -116,6 +117,7 @@ def transaction(code=None):
                 raise RoomError("房间不存在，请检查邀请链接。", 404)
             room = json.loads(row[0])
             room["settings"].setdefault("max_players", 6)
+            ensure_session(room)
         yield conn, room
         if room is not None:
             conn.execute("UPDATE rooms SET doc=? WHERE code=?", (json.dumps(room), code))
@@ -226,6 +228,7 @@ def finish_if_needed(room, state):
     by_seat = {p["seat"]: p for p in room["players"]}
     for i, seat in enumerate(hand["seats"]):
         by_seat[seat]["stack"] = state.stacks[i]
+    record_settlement(room, state)
     room["history"].append(dict(
         number=hand["number"], board=[repr(c) for c in state.get_board_cards(0)],
         results=[dict(name=by_seat[seat]["name"], delta=state.payoffs[i])
@@ -313,7 +316,8 @@ def view(room, player, state=None):
                 street=STREETS[state.street_index] if state and state.street_index is not None else "等待开局" if not state else "本手结束",
                 deadline=hand["deadline"] if hand else None,
                 server_time=time.time(), legal=legal,
-                actions=hand["actions"] if hand else [], history=room["history"])
+                actions=hand["actions"] if hand else [], history=room["history"],
+                session_ended=room["session"]["ended_at"] is not None)
 
 
 @rooms.get("/friends")
@@ -339,6 +343,7 @@ def create_room():
                 players=[player], settings=dict(sb=1, bb=2, starting_stack=1000, turn_seconds=0,
                                                 max_players=capacity),
                 version=1, hand=None, dealer=-1, paused=False, history=[])
+    ensure_session(room)
     with transaction() as (conn, _):
         rate_limit(conn, "create", 20)
         conn.execute("INSERT INTO rooms VALUES (?,?)", (code, json.dumps(room)))
@@ -354,12 +359,15 @@ def join_room(code):
         invite = data.get("invite", "")
         if not isinstance(invite, str) or not secrets.compare_digest(invite, room["invite"]):
             raise RoomError("邀请链接无效，请向朋友索取完整链接。", 403)
+        if room["session"]["ended_at"] is not None:
+            raise RoomError("本场已经结束，请创建新的房间。", 409)
         capacity = room["settings"]["max_players"]
         if len(room["players"]) >= capacity:
             raise RoomError(f"{capacity} 个座位已满。已有座位请使用原浏览器进入。", 409)
         seat = next(i for i in range(capacity) if not any(p["seat"] == i for p in room["players"]))
         player, token = new_player(data.get("name"), seat, room["settings"]["starting_stack"])
         room["players"].append(player)
+        sync_players(room)
         if room["owner"] is None:
             room["owner"] = player["id"]
         room["version"] += 1
@@ -375,6 +383,22 @@ def room_state(code):
     return jsonify(result)
 
 
+@rooms.get("/api/rooms/<code>/summary")
+@rooms.get("/api/rooms/<code>/export/<kind>")
+def room_summary(code, kind=None):
+    with transaction(code) as (_, room):
+        member(room)
+        tick(room)
+        summary = session_summary(room)
+    if kind is None:
+        return jsonify(summary)
+    if kind not in ("summary", "hands"):
+        raise RoomError("账单格式不存在。", 404)
+    return Response(csv_text(summary, detailed=kind == "hands"),
+                    content_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="tongzhuo-{code}-{kind}.csv"'})
+
+
 @rooms.post("/api/rooms/<code>/<command>")
 def room_command(code, command):
     data = body()
@@ -382,6 +406,8 @@ def room_command(code, command):
         player = member(room)
         state = tick(room)
         active = state is not None and state.status
+        if room["session"]["ended_at"] is not None and command != "leave":
+            raise RoomError("本场已经结束，账单已固定；请创建新的房间开局。", 409)
         if command == "act":
             if room["paused"]:
                 raise RoomError("房主已暂停牌局。", 409)
@@ -419,6 +445,8 @@ def room_command(code, command):
                                for i, p in enumerate(ordered)}, deadline=None,
                         player_ids={str(p["seat"]): p["id"] for p in ordered})
             room["hand"] = hand
+            if room["session"]["started_at"] is None:
+                room["session"]["started_at"] = time.time()
             room["paused"] = False
             state = build_state(hand)
             set_deadline(room)
@@ -471,11 +499,23 @@ def room_command(code, command):
         elif command == "leave":
             if active:
                 raise RoomError("请在本手结束后离桌；断线仍可重连。", 409)
+            sync_players(room)
+            record = room["session"]["participants"][player["id"]]
+            # After ending, retain the fixed final table balances in the bill.
+            if room["session"]["ended_at"] is None:
+                record.update(left_at=time.time(), cashout=player["stack"], stack=0)
             room["players"].remove(player)
             if player["id"] == room["owner"]:
                 room["owner"] = room["players"][0]["id"] if room["players"] else None
             room["version"] += 1
             return jsonify(left=True)
+        elif command == "end":
+            host(room, player)
+            if active:
+                raise RoomError("请先完成本手，再结束本场。", 409)
+            sync_players(room)
+            room["session"]["ended_at"] = time.time()
+            room["version"] += 1
         else:
             raise RoomError("未知操作。", 404)
         result = view(room, player, state)

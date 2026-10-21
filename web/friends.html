@@ -41,7 +41,7 @@
   </main>
 
   <main id="room" class="room hidden">
-    <div class="room-heading"><div><div class="eyebrow">YOUR PRIVATE TABLE</div><h1>好朋友，同一桌。<span id="roomCode"></span></h1></div><button id="inviteBtn" class="secondary">复制邀请链接 ↗</button></div>
+    <div class="room-heading"><div><div class="eyebrow">YOUR PRIVATE TABLE</div><h1>好朋友，同一桌。<span id="roomCode"></span></h1></div><div class="heading-actions"><button id="summaryBtn" class="primary">整场统计</button><button id="inviteBtn" class="secondary">复制邀请链接 ↗</button></div></div>
     <div class="room-grid">
       <section class="play-area">
         <div class="table-topline"><span id="blindInfo"></span><span id="handInfo"></span></div>
@@ -86,6 +86,21 @@
       </aside>
     </div>
   </main>
+  <dialog id="summaryDialog" class="session-dialog" aria-labelledby="summaryTitle">
+    <div class="report-heading"><div><div class="eyebrow">THE NIGHT IN NUMBERS</div><h2 id="summaryTitle">整场统计</h2></div><button id="closeSummary" class="secondary" aria-label="关闭整场统计">关闭</button></div>
+    <p id="summaryStatus" class="report-status" role="status">正在读取统计…</p>
+    <div id="summaryContent" class="hidden">
+      <div class="report-metrics"><div><span>整场时长</span><b id="sessionDuration"></b></div><div><span>已结算</span><b id="sessionHands"></b></div><div><span>最大底池</span><b id="sessionMaxPot"></b></div><div><span>累计买入</span><b id="sessionBuyin"></b></div></div>
+      <p id="sessionTimes" class="micro"></p>
+      <section class="report-section"><div class="section-head"><h3 id="rankingTitle">全桌盈亏榜</h3><span>虚拟筹码 · 可左右滑动</span></div><div class="ranking-scroll" tabindex="0" role="region" aria-label="全桌盈亏账目，可左右滑动"><table class="ranking-table"><thead><tr><th scope="col">玩家</th><th scope="col">净盈亏</th><th scope="col">买入</th><th scope="col">桌上／带出</th><th scope="col">参与</th><th scope="col">获胜</th></tr></thead><tbody id="rankingRows"></tbody></table></div><p id="accountingCheck" class="micro"></p></section>
+      <section class="report-section"><div class="section-head"><h3>盈亏曲线</h3><span>点击玩家可隐藏曲线</span></div><div id="profitChart" class="profit-chart"></div><div class="chart-scrubber"><label for="chartHand">查看进度</label><input id="chartHand" type="range" min="0" step="1"><output id="chartHandLabel" for="chartHand"></output></div><div id="chartLegend" class="chart-legend"></div></section>
+      <section class="report-section"><h3>最大底池这一手</h3><div id="largestPotDetail" class="largest-pot"></div></section>
+      <p class="report-explanation">只统计已结算的手牌；正在进行的下注不影响账目。参与＝实际获发底牌；获胜＝分到任一主池或边池，每手最多计一次，含平分，不等于本手净盈利。底池不含无人跟注退回的筹码。时长从第一手开始，包含暂停和手间等待。离桌重新加入会单列新记录。</p>
+      <div class="report-footer"><div class="export-actions"><button id="exportSummary" class="secondary">导出总账 CSV</button><button id="exportHands" class="secondary">导出逐手 CSV</button></div><button id="endSessionBtn" class="end-session">结束本场</button></div>
+      <p id="endSessionHint" class="micro"></p>
+    </div>
+  </dialog>
+  <dialog id="endDialog" aria-labelledby="endTitle"><h2 id="endTitle">结束今晚的牌局？</h2><p class="muted">所有已结算手牌会汇总为最终账单。结束后不能继续开牌、补码或修改账目；下一场请新建房间。</p><div class="dialog-actions"><button id="cancelEnd" class="secondary">继续玩</button><button id="confirmEnd" class="primary">结束并生成总结</button></div></dialog>
   <div id="toast" class="toast hidden" role="alert"></div>
   <dialog id="nameDialog"><form id="renameForm"><h2>换个牌桌昵称</h2><label for="newName">新昵称</label><input id="newName" maxlength="16" required><div class="dialog-actions"><button type="button" class="secondary" id="cancelRename">取消</button><button type="submit" class="primary">保存</button></div></form></dialog>
   <dialog id="inviteDialog"><h2>邀请朋友同桌</h2><p class="muted">把完整链接发给朋友，按房间设定的人数入座。</p><label for="inviteLink">私人邀请链接</label><input id="inviteLink" readonly><div class="dialog-actions"><button class="primary" id="closeInvite">完成</button></div></dialog>
