@@ -1,7 +1,7 @@
 """Private poker rooms with 2–11 seats. SQLite is shared by all workers.
 
-Only a shuffled deck and accepted commands are persisted; PokerKit replays them
-to reconstruct each hand. No client receives the deck or another player's cards.
+PokerKit reconstructs each hand from its stored shuffled deck and commands.
+No client receives the deck or another player's hidden cards.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import sqlite3
 import time
@@ -25,6 +26,8 @@ AUTOMATIONS = tuple(a for a in Automation if a not in (
 ))
 STREETS = ["翻牌前", "翻牌", "转牌", "河牌"]
 MAX_PLAYERS = 11
+CHAT_LIMIT = 200
+CHAT_MESSAGE_LENGTH = 300
 
 
 def hand_positions(hand):
@@ -117,6 +120,8 @@ def transaction(code=None):
                 raise RoomError("房间不存在，请检查邀请链接。", 404)
             room = json.loads(row[0])
             room["settings"].setdefault("max_players", 6)
+            room.setdefault("chat", [])
+            room.setdefault("chat_version", 0)
             ensure_session(room)
         yield conn, room
         if room is not None:
@@ -317,7 +322,8 @@ def view(room, player, state=None):
                 deadline=hand["deadline"] if hand else None,
                 server_time=time.time(), legal=legal,
                 actions=hand["actions"] if hand else [], history=room["history"],
-                session_ended=room["session"]["ended_at"] is not None)
+                session_ended=room["session"]["ended_at"] is not None,
+                chat_version=room["chat_version"])
 
 
 @rooms.get("/friends")
@@ -342,7 +348,8 @@ def create_room():
     room = dict(code=code, invite=secrets.token_urlsafe(24), owner=player["id"],
                 players=[player], settings=dict(sb=1, bb=2, starting_stack=1000, turn_seconds=0,
                                                 max_players=capacity),
-                version=1, hand=None, dealer=-1, paused=False, history=[])
+                version=1, hand=None, dealer=-1, paused=False, history=[],
+                chat=[], chat_version=0)
     ensure_session(room)
     with transaction() as (conn, _):
         rate_limit(conn, "create", 20)
@@ -381,6 +388,57 @@ def room_state(code):
         player = member(room)
         result = view(room, player, tick(room))
     return jsonify(result)
+
+
+def public_message(message):
+    return {key: message[key] for key in ("id", "player_id", "name", "text", "created_at")}
+
+
+@rooms.get("/api/rooms/<code>/chat")
+def chat_history(code):
+    after = request.args.get("after", "0")
+    if not after.isascii() or not after.isdigit() or len(after) > 16:
+        raise RoomError("聊天记录游标无效。")
+    with transaction(code) as (_, room):
+        member(room)
+        messages = room["chat"]
+        result = dict(version=room["chat_version"],
+                      oldest_id=messages[0]["id"] if messages else 0,
+                      messages=[public_message(m) for m in messages if m["id"] > int(after)])
+    return jsonify(result)
+
+
+@rooms.post("/api/rooms/<code>/chat")
+def send_chat(code):
+    data = body()
+    with transaction(code) as (_, room):
+        player = member(room)
+        text = data.get("text")
+        client_id = data.get("client_id")
+        if (not isinstance(text, str) or not 1 <= len(text.strip()) <= CHAT_MESSAGE_LENGTH
+                or any(ord(c) < 32 and c not in "\n\t" for c in text)):
+            raise RoomError(f"消息须为 1–{CHAT_MESSAGE_LENGTH} 字的文字，不能包含控制字符。")
+        if not isinstance(client_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", client_id):
+            raise RoomError("消息标识无效，请刷新后重试。")
+        text = text.strip()
+        duplicate = next((m for m in room["chat"] if m["player_id"] == player["id"]
+                          and m["client_id"] == client_id), None)
+        if duplicate:
+            if duplicate["text"] != text:
+                raise RoomError("这条消息已经发送，请使用新的消息标识。", 409)
+            return jsonify(message=public_message(duplicate), version=room["chat_version"])
+        now = time.time()
+        if now - player.get("last_chat_at", 0) < 1:
+            raise RoomError("消息发得太快，请稍等一秒再发送。", 429)
+        room["chat_version"] += 1
+        message = dict(id=room["chat_version"], player_id=player["id"], name=player["name"],
+                       text=text, created_at=now, client_id=client_id)
+        room["chat"].append(message)
+        room["chat"] = room["chat"][-CHAT_LIMIT:]
+        player["last_chat_at"] = now
+        # Chat has its own sequence: messages cannot invalidate a betting action.
+        result = dict(message=public_message(message), version=room["chat_version"])
+    return jsonify(result), 201
 
 
 @rooms.get("/api/rooms/<code>/summary")

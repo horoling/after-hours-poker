@@ -619,6 +619,138 @@ class PrivateRoomTests(unittest.TestCase):
         self.assertEqual(report["completed_hands"],1)
         self.assertTrue(all(p["hands_played"]==1 for p in report["players"]))
 
+    def chat(self, text="你好，同桌！", player=0, message_id=None, **extra):
+        self.chat_counter=getattr(self,"chat_counter",0)+1
+        return self.client.post(f"/api/rooms/{self.code}/chat",json={
+            "text":text,"client_id":message_id or f"test-message-{self.chat_counter:06d}",**extra,
+        },headers={"Authorization":"Bearer "+self.tokens[player]})
+
+    def chat_history(self, after=0, client=None):
+        return (client or self.client).get(f"/api/rooms/{self.code}/chat?after={after}",
+                                          headers={"Authorization":"Bearer "+self.tokens[0]})
+
+    def test_chat_auth_room_isolation_and_authoritative_sender(self):
+        self.join(1)
+        url=f"/api/rooms/{self.code}/chat"
+        self.assertEqual(self.client.get(url).status_code,401)
+        self.assertEqual(self.client.post(url,json={"text":"陌生人"}).status_code,401)
+        response=self.chat("中文、emoji 🃏\n第二行",player=1,name="伪装房主",player_id="fake",created_at=1)
+        self.assertEqual(response.status_code,201)
+        message=response.get_json()["message"]
+        self.assertEqual(message["name"],"玩家 1")
+        self.assertNotEqual(message["player_id"],"fake")
+        self.assertGreater(message["created_at"],1)
+        self.assertEqual(message["text"],"中文、emoji 🃏\n第二行")
+        self.assertNotIn("client_id",message)
+        self.assertNotIn("token_hash",str(response.get_json()))
+        self.assertEqual(self.chat_history().get_json()["messages"],[message])
+        other=self.client.post("/api/rooms",json={"name":"另一桌"}).get_json()
+        foreign={"Authorization":"Bearer "+other["token"]}
+        self.assertEqual(self.client.get(url,headers=foreign).status_code,401)
+        self.assertEqual(self.client.post(url,json={"text":"跨房间","client_id":"test-foreign-123456"},headers=foreign).status_code,401)
+
+    def test_chat_validation_unicode_and_literal_html(self):
+        for text in ("", " \n\t ", "字"*301, True, 123, [], "含\x00控制符", "含\r回车符"):
+            self.assertEqual(self.chat(text).status_code,400)
+        for message_id in ("x",True,123,"!"*20,"中"*20):
+            self.assertEqual(self.chat(message_id=message_id).status_code,400)
+        html='<img src=x onerror="alert(1)"> & <script>test</script>'
+        self.assertEqual(self.chat(html).get_json()["message"]["text"],html)
+        self.join(1)
+        response=self.chat("🃏"*300,player=1)
+        self.assertEqual(response.status_code,201)
+        self.assertEqual(len(response.get_json()["message"]["text"]),300)
+        self.assertEqual(self.chat_history().get_json()["version"],2)
+
+    def test_chat_retry_is_idempotent_and_rate_limit_is_per_player(self):
+        self.join(1)
+        first=self.chat(message_id="test-retry-0000001")
+        retry=self.chat(message_id="test-retry-0000001")
+        self.assertEqual(retry.status_code,200)
+        self.assertEqual(first.get_json(),retry.get_json())
+        self.assertEqual(self.chat("改成另一条",message_id="test-retry-0000001").status_code,409)
+        self.assertEqual(self.chat("连续刷屏").status_code,429)
+        self.assertEqual(self.chat("同一个 IP 的另一位",player=1).status_code,201)
+        self.assertEqual(len(self.chat_history().get_json()["messages"]),2)
+        with self.app.app_context(),transaction(self.code) as (_,room):
+            room["players"][0]["last_chat_at"]-=2
+        self.assertEqual(self.chat("稍后发送").status_code,201)
+
+    def test_chat_concurrent_retry_and_ordered_incremental_sync(self):
+        def post(_):
+            return self.app.test_client().post(f"/api/rooms/{self.code}/chat",json={
+                "text":"只出现一次","client_id":"test-concurrent-1234",
+            },headers={"Authorization":"Bearer "+self.tokens[0]})
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses=list(pool.map(post,range(2)))
+        self.assertEqual(sorted(r.status_code for r in responses),[200,201])
+        self.join(1)
+        self.chat("第二条",player=1)
+        result=self.chat_history(after=1).get_json()
+        self.assertEqual([m["id"] for m in result["messages"]],[2])
+        self.assertEqual(self.chat_history(after=2).get_json()["messages"],[])
+        for cursor in ("-1","no","1.1","9"*20,"一"):
+            self.assertEqual(self.chat_history(after=cursor).status_code,400)
+
+    def test_chat_does_not_change_action_version_deadline_or_accounting(self):
+        self.join(1)
+        state=self.start()
+        before=self.summary()
+        self.assertEqual(self.chat("下注前聊一句").status_code,201)
+        after=self.req().get_json()
+        self.assertEqual(after["version"],state["version"])
+        self.assertEqual(after["deadline"],state["deadline"])
+        self.assertEqual(after["actions"],state["actions"])
+        self.assertEqual(after["chat_version"],1)
+        self.assertNotIn("chat",after)
+        self.assertEqual(self.summary()["players"],before["players"])
+        response=self.req("act",player=state["actor_seat"],kind="call",version=state["version"])
+        self.assertEqual(response.status_code,200)
+
+    def test_chat_available_while_paused_and_after_session_ends(self):
+        self.join(1)
+        self.start()
+        self.req("pause")
+        self.assertEqual(self.chat("暂停聊聊").status_code,201)
+        self.req("pause")
+        self.play_calls()
+        self.req("end")
+        bill=self.summary()
+        self.assertEqual(self.chat("下次再来！",player=1).status_code,201)
+        after=self.summary()
+        for key in ("version","players","hands","ended_at","elapsed_seconds"):
+            self.assertEqual(bill[key],after[key])
+        self.assertEqual(self.chat_history().get_json()["version"],2)
+
+    def test_chat_retains_last_200_messages_and_survives_restart(self):
+        for i in range(205):
+            with self.app.app_context(),transaction(self.code) as (_,room):
+                room["players"][0]["last_chat_at"]=0
+            self.assertEqual(self.chat(f"消息 {i+1}").status_code,201)
+        result=self.chat_history().get_json()
+        self.assertEqual(result["version"],205)
+        self.assertEqual(result["oldest_id"],6)
+        self.assertEqual([m["id"] for m in result["messages"]],list(range(6,206)))
+        client=create_app(self.config).test_client()
+        self.assertEqual(self.chat_history(client=client).get_json(),result)
+        self.assertEqual(self.chat_history().headers["Cache-Control"],"no-store")
+
+    def test_chat_old_rooms_rename_and_new_occupant_identity(self):
+        self.join(1)
+        with self.app.app_context(),transaction(self.code) as (_,room):
+            del room["chat"],room["chat_version"]
+        self.assertEqual(self.chat_history().get_json()["messages"],[])
+        old=self.chat("原来的我",player=1).get_json()["message"]
+        self.req("rename",player=1,name="新昵称")
+        self.assertEqual(self.chat_history().get_json()["messages"][0]["name"],"玩家 1")
+        self.req("leave",player=1)
+        self.assertEqual(self.chat("离桌后",player=1).status_code,401)
+        joined=self.client.post(f"/api/rooms/{self.code}/join",json={"name":"新昵称","invite":self.invite}).get_json()
+        self.tokens.append(joined["token"])
+        fresh=self.chat("新的座位",player=2).get_json()["message"]
+        self.assertNotEqual(fresh["player_id"],old["player_id"])
+        self.assertEqual(len(self.chat_history().get_json()["messages"]),2)
+
 
 if __name__ == "__main__":
     unittest.main()

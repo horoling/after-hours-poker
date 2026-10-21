@@ -12,6 +12,8 @@ let snapshot = null, busy = false, polling = false, pollTimer, toastTimer;
 let sizingTurn = "", selectedRaise = null, selectedPreset = "", allInCall = false;
 let serverOffset = 0, savedSettings = "", connectionOK = true;
 let sessionReport = null, reportBusy = false, chartSelection = null;
+let chatMessages = [], chatCursor = 0, chatTarget = 0, lastReadChat = null;
+let chatReady = false, chatLoading = false, chatSending = false, chatEpoch = 0, pendingChat = null;
 const hiddenCurves = new Set();
 let code = location.pathname.match(/^\/rooms\/([A-F0-9]{10})$/)?.[1] || null;
 let invite = new URLSearchParams(location.hash.slice(1)).get("invite") || "";
@@ -22,8 +24,25 @@ try {
 } catch (_) { /* Storage may be unavailable. */ }
 let token = code ? storage[code]?.token || "" : "";
 
-function saveStorage() {
-  try { localStorage.setItem("tongzhuo.rooms", JSON.stringify(storage)); }
+function saveStorage(removedCode=null, removedToken=null) {
+  try {
+    // Another open room may have saved a seat since this page loaded.
+    let saved={};
+    try {saved=JSON.parse(localStorage.getItem("tongzhuo.rooms") || "{}");}
+    catch (_) { /* Replace malformed data while preserving any valid current seat. */ }
+    const latest=saved && typeof saved==="object" && !Array.isArray(saved) ? saved : {};
+    if(removedCode) {
+      if(latest[removedCode]?.token===removedToken)delete latest[removedCode];
+    } else if(code && storage[code]) {
+      const seat=storage[code], previous=latest[code];
+      latest[code]={...seat};
+      if(previous?.token===seat.token && (previous.lastReadChat!=null || seat.lastReadChat!=null)) {
+        latest[code].lastReadChat=Math.max(previous.lastReadChat || 0,seat.lastReadChat || 0);
+      }
+    }
+    storage=latest;
+    localStorage.setItem("tongzhuo.rooms", JSON.stringify(storage));
+  }
   catch (_) { toast("浏览器无法保存座位，关闭页面后可能无法恢复。请允许本地存储。", 10000); }
 }
 function toast(message, duration = 4500) {
@@ -208,18 +227,25 @@ function updateEnabled() {
   $("renameBtn").disabled = blocked || snapshot.session_ended;
   $("endSessionBtn").disabled = $("confirmEnd").disabled = blocked || active || snapshot.session_ended;
   $("pauseBtn").disabled = blocked;
+  updateChatControls();
 }
 function render(next) {
   // Ignore a slower GET response that predates an accepted local command.
   if (snapshot && next.version < snapshot.version) return;
   const changed = !snapshot || next.version !== snapshot.version;
   const justEnded = next.session_ended && !snapshot?.session_ended;
+  if (!snapshot) {
+    chatEpoch++; chatMessages=[]; chatCursor=0; chatTarget=0;
+    chatReady=false; chatLoading=false; chatSending=false; pendingChat=null;
+    lastReadChat=storage[code]?.lastReadChat ?? null;
+    $("chatMessages").innerHTML='<p class="chat-empty">还没有消息，和朋友打个招呼吧。</p>';
+  }
   snapshot = next;
   serverOffset = next.server_time * 1000 - Date.now();
   connection(true);
   hide("welcome",true); hide("room",false);
   const me = myPlayer();
-  if (storage[code]) { storage[code].name = me.name; saveStorage(); }
+  if (storage[code] && storage[code].name!==me.name) { storage[code].name = me.name; saveStorage(); }
   $("roomCode").textContent = `ROOM ${code}`;
   $("blindInfo").textContent = `无限注德州 · 盲注 ${num(next.settings.sb)} / ${num(next.settings.bb)}`;
   $("handInfo").textContent = `${next.hand_number ? `第 ${next.hand_number} 手 · ${next.street}` : `${next.settings.max_players} 人私人桌`}`;
@@ -242,8 +268,10 @@ function render(next) {
   }
   renderActions(); updateClock();
   $("summaryBtn").textContent = next.session_ended ? "赛后总结" : "整场统计";
-  if (justEnded && !$("summaryDialog").open) $("summaryDialog").showModal();
+  if (justEnded && !$("summaryDialog").open && !$("chatDialog").open) $("summaryDialog").showModal();
   if ($("summaryDialog").open && (changed || !sessionReport)) loadSummary();
+  chatTarget=Math.max(chatTarget,next.chat_version || 0);
+  if (!chatReady || chatTarget>chatCursor) loadChat();
 }
 function updateClock() {
   if (!snapshot) return;
@@ -252,6 +280,121 @@ function updateClock() {
   if (snapshot.phase === "playing" && !snapshot.paused && snapshot.deadline) text += ` · ${Math.max(0,Math.ceil(snapshot.deadline-(Date.now()+serverOffset)/1000))}s`;
   $("turnNote").textContent = text;
   if ($("summaryDialog").open && sessionReport) updateSessionDuration();
+  hide("chatTurnNotice",!snapshot.legal);
+  if(snapshot.legal) $("chatTurnNotice").textContent=`轮到你行动了${snapshot.deadline ? ` · 剩 ${Math.max(0,Math.ceil(snapshot.deadline-(Date.now()+serverOffset)/1000))} 秒` : ""} · 返回牌桌 →`;
+}
+
+function updateChatControls() {
+  const count=Array.from($("chatInput").value.trim()).length;
+  $("chatCharCount").textContent=`${count} / 300`;
+  $("chatCharCount").classList.toggle("negative",count>300);
+  $("chatSendBtn").disabled=!snapshot || !connectionOK || chatSending || !count || count>300;
+  $("chatSendBtn").textContent=chatSending ? "发送中…" : "发送";
+}
+function updateChatBadge() {
+  const unread=lastReadChat == null ? 0 : chatMessages.filter(m=>m.id>lastReadChat && m.player_id!==snapshot?.me).length;
+  for (const id of ["chatBtn","actionChatBtn"]) {
+    const badge=$(id).querySelector(".chat-unread");
+    badge.textContent=unread>99 ? "99+" : unread;
+    badge.classList.toggle("hidden",unread===0);
+    $(id).setAttribute("aria-label",unread ? `房间聊天，${unread} 条未读消息` : "房间聊天");
+  }
+}
+function markChatRead() {
+  if (lastReadChat==null || chatCursor>lastReadChat) {
+    lastReadChat=chatCursor;
+    if(storage[code]) {storage[code].lastReadChat=lastReadChat;saveStorage();}
+  }
+  updateChatBadge();
+}
+function chatAtBottom() {
+  const log=$("chatMessages");
+  return log.scrollHeight-log.scrollTop-log.clientHeight<45;
+}
+function scrollChatToBottom() {
+  const log=$("chatMessages");
+  log.scrollTop=log.scrollHeight;
+  hide("chatLatestBtn",true); markChatRead();
+}
+function renderChat(forceBottom=false) {
+  const log=$("chatMessages"), atBottom=chatAtBottom(), top=log.getBoundingClientRect().top;
+  const anchor=Array.from(log.querySelectorAll(".chat-message")).find(el=>el.getBoundingClientRect().bottom>top);
+  const anchorOffset=anchor ? anchor.getBoundingClientRect().top-top : 0;
+  const allowed=new Set(chatMessages.map(m=>String(m.id)));
+  log.querySelectorAll(".chat-message").forEach(el=>{if(!allowed.has(el.dataset.messageId))el.remove();});
+  if(chatMessages.length)log.querySelector(".chat-empty")?.remove();
+  let added=false;
+  for (const m of chatMessages) {
+    if(log.querySelector(`[data-message-id="${m.id}"]`))continue;
+    added=true;
+    const mine=m.player_id===snapshot.me;
+    const date=new Date(m.created_at*1000);
+    const time=date.toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});
+    const html=`<article class="chat-message${mine ? " mine" : ""}" data-message-id="${m.id}"><div class="chat-meta"><b>${esc(m.name)}${mine ? " · 你" : ""}</b><time datetime="${date.toISOString()}">${esc(time)}</time></div><div class="chat-bubble">${esc(m.text)}</div></article>`;
+    const next=Array.from(log.querySelectorAll(".chat-message")).find(el=>Number(el.dataset.messageId)>m.id);
+    if(next)next.insertAdjacentHTML("beforebegin",html);else log.insertAdjacentHTML("beforeend",html);
+  }
+  if($("chatDialog").open && (forceBottom || atBottom))scrollChatToBottom();
+  else if(anchor?.isConnected)log.scrollTop+=anchor.getBoundingClientRect().top-top-anchorOffset;
+  if(added && $("chatDialog").open && !forceBottom && !atBottom)hide("chatLatestBtn",false);
+  updateChatBadge();
+}
+async function loadChat() {
+  if(chatLoading || !snapshot)return;
+  const epoch=chatEpoch;
+  chatLoading=true;
+  let loaded=false;
+  try {
+    const result=await request(`/api/rooms/${code}/chat?after=${chatCursor}`);
+    if(epoch!==chatEpoch || !snapshot)return;
+    const messages=new Map(chatMessages.map(m=>[m.id,m]));
+    for(const message of result.messages)messages.set(message.id,message);
+    chatMessages=Array.from(messages.values()).filter(m=>m.id>=result.oldest_id).sort((a,b)=>a.id-b.id).slice(-200);
+    chatCursor=Math.max(chatCursor,result.version);
+    if(lastReadChat==null)lastReadChat=chatCursor;
+    chatReady=true;loaded=true;
+    renderChat();
+    if(!chatSending && !pendingChat)$("chatStatus").textContent="";
+  } catch(error) {
+    if(epoch===chatEpoch)$("chatStatus").textContent=`聊天同步失败，正在等待重连。${error.message}`;
+  } finally {
+    if(epoch===chatEpoch) {
+      chatLoading=false;
+      if(loaded && chatTarget>chatCursor)loadChat();
+    }
+  }
+}
+function openChat() {
+  $("chatDialog").showModal();
+  scrollChatToBottom();loadChat();
+  // Mobile keyboards open when the player chooses the input, keeping history visible.
+  if(window.matchMedia("(min-width:761px)").matches)$("chatInput").focus({preventScroll:true});
+}
+function chatMessageId() {
+  const bytes=new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes,b=>b.toString(16).padStart(2,"0")).join("");
+}
+async function sendChat() {
+  if($("chatSendBtn").disabled || !snapshot)return;
+  const input=$("chatInput"), text=input.value.trim(), epoch=chatEpoch;
+  if(!pendingChat || pendingChat.text!==text)pendingChat={text,client_id:chatMessageId()};
+  const payload=pendingChat;
+  chatSending=true;updateChatControls();$("chatStatus").textContent="";
+  try {
+    const result=await request(`/api/rooms/${code}/chat`,payload);
+    if(epoch!==chatEpoch || !snapshot)return;
+    pendingChat=null;
+    if(input.value.trim()===text)input.value="";
+    if(!chatMessages.some(m=>m.id===result.message.id))chatMessages.push(result.message);
+    chatMessages=chatMessages.sort((a,b)=>a.id-b.id).slice(-200);
+    chatTarget=Math.max(chatTarget,result.version);
+    renderChat(true);loadChat();
+  } catch(error) {
+    if(epoch===chatEpoch)$("chatStatus").textContent=`未确认发送：${error.message} 内容已保留，可再点发送重试。`;
+  } finally {
+    if(epoch===chatEpoch) {chatSending=false;updateChatControls();}
+  }
 }
 
 const REPORT_COLORS = ["#215644", "#b5463b", "#386da6", "#9a6b20", "#8b55a0", "#087e88", "#ad5e83", "#657b24", "#b66127", "#5057b0", "#687b8a"];
@@ -361,7 +504,10 @@ async function poll() {
       toast(error.message,10000);
       hide("room",true); hide("welcome",false);
       token = ""; snapshot = null;
-      delete storage[code]; saveStorage(); setupWelcome();
+      chatEpoch++;chatLoading=false;chatSending=false;pendingChat=null;
+      if($("chatDialog").open)$("chatDialog").close();
+      $("chatInput").value="";updateChatControls();
+      saveStorage(code,storage[code]?.token); setupWelcome();
     }
   } finally { polling = false; }
 }
@@ -375,7 +521,7 @@ async function send(command, data={}) {
   try {
     const result = await request(`/api/rooms/${code}/${command}`, {...data,version:snapshot.version});
     if (result.left) {
-      delete storage[code]; saveStorage();
+      saveStorage(code,token);
       location.href = "/friends";
     } else render(result);
     return result;
@@ -411,6 +557,19 @@ $("inviteBtn").addEventListener("click",async()=>{
   catch (_) { $("inviteLink").value=invitationURL(); $("inviteDialog").showModal(); $("inviteLink").select(); }
 });
 $("closeInvite").addEventListener("click",()=>$("inviteDialog").close());
+$("chatBtn").addEventListener("click",openChat);
+$("actionChatBtn").addEventListener("click",openChat);
+$("closeChat").addEventListener("click",()=>$("chatDialog").close());
+$("chatTurnNotice").addEventListener("click",()=>$("chatDialog").close());
+$("chatLatestBtn").addEventListener("click",scrollChatToBottom);
+$("chatMessages").addEventListener("scroll",()=>{if($("chatDialog").open && chatAtBottom()){hide("chatLatestBtn",true);markChatRead();}});
+$("chatInput").addEventListener("input",updateChatControls);
+$("chatInput").addEventListener("keydown",event=>{
+  if(event.key==="Enter" && !event.shiftKey && !event.isComposing && event.keyCode!==229) {
+    event.preventDefault();$("chatForm").requestSubmit();
+  }
+});
+$("chatForm").addEventListener("submit",event=>{event.preventDefault();sendChat();});
 $("summaryBtn").addEventListener("click",()=>{$("summaryDialog").showModal();loadSummary();});
 $("closeSummary").addEventListener("click",()=>$("summaryDialog").close());
 $("chartHand").addEventListener("input",()=>{chartSelection=Number($("chartHand").value);renderProfitChart();});

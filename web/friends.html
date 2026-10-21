@@ -41,7 +41,7 @@
   </main>
 
   <main id="room" class="room hidden">
-    <div class="room-heading"><div><div class="eyebrow">YOUR PRIVATE TABLE</div><h1>好朋友，同一桌。<span id="roomCode"></span></h1></div><div class="heading-actions"><button id="summaryBtn" class="primary">整场统计</button><button id="inviteBtn" class="secondary">复制邀请链接 ↗</button></div></div>
+    <div class="room-heading"><div><div class="eyebrow">YOUR PRIVATE TABLE</div><h1>好朋友，同一桌。<span id="roomCode"></span></h1></div><div class="heading-actions"><button id="chatBtn" class="secondary">聊天 <span class="chat-unread hidden" aria-hidden="true"></span></button><button id="summaryBtn" class="primary">整场统计</button><button id="inviteBtn" class="secondary">复制邀请链接 ↗</button></div></div>
     <div class="room-grid">
       <section class="play-area">
         <div class="table-topline"><span id="blindInfo"></span><span id="handInfo"></span></div>
@@ -52,7 +52,7 @@
           <div id="seats"></div>
         </div>
         <section class="action-panel" id="actionPanel" aria-label="牌局操作">
-          <div id="tableMessage" class="table-message"></div>
+          <div class="action-panel-heading"><div id="tableMessage" class="table-message"></div><button id="actionChatBtn" class="text-button">聊天 <span class="chat-unread hidden" aria-hidden="true"></span></button></div>
           <div id="betActions" class="hidden">
             <div class="action-buttons"><button id="foldBtn" class="fold">弃牌 <kbd>F</kbd></button><button id="callBtn" class="primary"><span id="callLabel">过牌</span> <kbd>C</kbd></button></div>
             <div class="bet-presets" aria-label="快捷选择下注金额">
@@ -86,6 +86,15 @@
       </aside>
     </div>
   </main>
+  <dialog id="chatDialog" class="chat-dialog" aria-labelledby="chatTitle">
+    <div class="chat-heading"><div><div class="eyebrow">AROUND THE TABLE</div><h2 id="chatTitle">同桌聊两句</h2></div><button id="closeChat" class="secondary" aria-label="关闭聊天，返回牌桌">返回牌桌</button></div>
+    <p class="micro chat-retention">仅本房间成员可见 · 保留最近 200 条</p>
+    <button id="chatTurnNotice" class="chat-turn-notice hidden">轮到你行动了 · 返回牌桌 →</button>
+    <div id="chatMessages" class="chat-messages" role="log" aria-label="房间聊天记录" aria-relevant="additions" tabindex="0"><p class="chat-empty">还没有消息，和朋友打个招呼吧。</p></div>
+    <button id="chatLatestBtn" class="chat-latest hidden" type="button">有新消息 · 回到最新 ↓</button>
+    <p id="chatStatus" class="chat-status" role="status"></p>
+    <form id="chatForm" class="chat-form"><label class="chat-input-label" for="chatInput">发送文字消息</label><div class="chat-compose"><textarea id="chatInput" rows="2" maxlength="600" placeholder="和这桌朋友聊两句…" enterkeyhint="send"></textarea><button id="chatSendBtn" class="primary" type="submit">发送</button></div><div class="chat-input-hint"><span class="chat-key-hint">Enter 发送 · Shift + Enter 换行</span><span id="chatCharCount">0 / 300</span></div></form>
+  </dialog>
   <dialog id="summaryDialog" class="session-dialog" aria-labelledby="summaryTitle">
     <div class="report-heading"><div><div class="eyebrow">THE NIGHT IN NUMBERS</div><h2 id="summaryTitle">整场统计</h2></div><button id="closeSummary" class="secondary" aria-label="关闭整场统计">关闭</button></div>
     <p id="summaryStatus" class="report-status" role="status">正在读取统计…</p>
