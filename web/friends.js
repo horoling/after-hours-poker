@@ -11,6 +11,7 @@ const POSITION_NAMES = {"D":"庄家 / BTN","SB":"小盲","BB":"大盲","D / SB":
 let snapshot = null, busy = false, polling = false, pollTimer, toastTimer;
 let sizingTurn = "", selectedRaise = null, selectedPreset = "", allInCall = false;
 let serverOffset = 0, savedSettings = "", connectionOK = true;
+let timerAnchor=null, countdownNoticeKey="", timeoutSyncKey="";
 let sessionReport = null, reportBusy = false, chartSelection = null;
 let chatMessages = [], chatCursor = 0, chatTarget = 0, lastReadChat = null;
 let chatReady = false, chatLoading = false, chatSending = false, chatEpoch = 0, pendingChat = null;
@@ -98,7 +99,7 @@ function renderSeats() {
     return `<div class="seat${mine ? " mine" : ""}${turn ? " turn" : ""}${p.status === "已弃牌" ? " folded" : ""}" style="left:${x}%;top:${y}%">
       ${p.bet ? `<span class="seat-bet">● ${num(p.bet)}</span>` : ""}
       ${snapshot.dealer === seat && snapshot.hand_number ? '<span class="dealer" title="庄家">D</span>' : ""}
-      <div class="seat-info">${p.position ? `<div class="seat-position" title="${esc(POSITION_NAMES[p.position] || p.position)}">${esc(p.position)}</div>` : ""}<div class="seat-name"><i class="seat-online${p.online ? "" : " away"}"></i>${esc(p.name)}${mine ? ' <span class="you">你</span>' : ""}${p.id === snapshot.owner ? " ♛" : ""}</div><div class="seat-stack">${num(p.stack)}</div><div class="seat-status">${esc(snapshot.phase === "lobby" ? "已入座" : lastActions.get(seat) || status)}${esc(delta)}</div></div>
+      <div class="seat-info">${p.position ? `<div class="seat-position" title="${esc(POSITION_NAMES[p.position] || p.position)}">${esc(p.position)}</div>` : ""}<div class="seat-name"><i class="seat-online${p.online ? "" : " away"}"></i>${esc(p.name)}${mine ? ' <span class="you">你</span>' : ""}${p.id === snapshot.owner ? " ♛" : ""}</div><div class="seat-stack">${num(p.stack)}</div><div class="seat-status">${esc(snapshot.phase === "lobby" ? "已入座" : lastActions.get(seat) || status)}${esc(delta)}</div>${turn && snapshot.turn_timer?.enabled ? '<div id="seatClock" class="seat-clock"><span id="seatTimerValue"></span><div class="countdown-track"><i></i></div></div>' : ""}</div>
       <div class="seat-cards">${snapshot.phase === "lobby" || p.status === "等待入局" ? "" : p.cards.length ? p.cards.map(c => card(c)).join("") : card(null,true)+card(null,true)}</div>
     </div>`;
   }).join("");
@@ -190,7 +191,7 @@ function renderSizing(forceAmount = false) {
 
 function selectPreset(preset) {
   const legal = snapshot?.legal;
-  if (!legal || busy || !connectionOK) return;
+  if (!legal || busy || !connectionOK || countdownState().expired) return;
   if (preset === "allin" && legal.all_in) {
     allInCall = legal.all_in.kind === "call";
     selectedRaise = allInCall ? null : legal.all_in.amount;
@@ -214,14 +215,15 @@ function confirmRaise() {
 function updateEnabled() {
   if (!snapshot) return;
   const active = snapshot.phase === "playing", blocked = busy || !connectionOK;
+  const betBlocked=blocked || countdownState().expired;
   $("startBtn").disabled = blocked || snapshot.session_ended || snapshot.players.filter(p=>p.stack>0).length < 2;
-  $("foldBtn").disabled = blocked || !snapshot.legal?.fold;
-  $("callBtn").disabled = blocked || !snapshot.legal;
+  $("foldBtn").disabled = betBlocked || !snapshot.legal?.fold;
+  $("callBtn").disabled = betBlocked || !snapshot.legal;
   const legal = snapshot.legal;
-  $("halfPotBtn").disabled = $("potBtn").disabled = blocked || !legal?.can_raise;
-  $("allinBtn").disabled = blocked || !legal?.all_in;
-  $("raiseSlider").disabled = blocked || !legal?.can_raise;
-  $("raiseBtn").disabled = blocked || !(allInCall && legal?.all_in?.kind === "call" || legal?.can_raise && $("raiseAmount").checkValidity());
+  $("halfPotBtn").disabled = $("potBtn").disabled = betBlocked || !legal?.can_raise;
+  $("allinBtn").disabled = betBlocked || !legal?.all_in;
+  $("raiseSlider").disabled = betBlocked || !legal?.can_raise;
+  $("raiseBtn").disabled = betBlocked || !(allInCall && legal?.all_in?.kind === "call" || legal?.can_raise && $("raiseAmount").checkValidity());
   $("rebuyBtn").disabled = blocked || active || snapshot.session_ended;
   $("leaveBtn").disabled = blocked || active;
   $("renameBtn").disabled = blocked || snapshot.session_ended;
@@ -235,12 +237,14 @@ function render(next) {
   const changed = !snapshot || next.version !== snapshot.version;
   const justEnded = next.session_ended && !snapshot?.session_ended;
   if (!snapshot) {
+    countdownNoticeKey="";timeoutSyncKey="";
     chatEpoch++; chatMessages=[]; chatCursor=0; chatTarget=0;
     chatReady=false; chatLoading=false; chatSending=false; pendingChat=null;
     lastReadChat=storage[code]?.lastReadChat ?? null;
     $("chatMessages").innerHTML='<p class="chat-empty">还没有消息，和朋友打个招呼吧。</p>';
   }
   snapshot = next;
+  timerAnchor=next.turn_timer?.enabled ? {at:performance.now(),remaining:next.turn_timer.remaining || 0,paused:next.turn_timer.paused} : null;
   serverOffset = next.server_time * 1000 - Date.now();
   connection(true);
   hide("welcome",true); hide("room",false);
@@ -277,11 +281,56 @@ function updateClock() {
   if (!snapshot) return;
   const actor = snapshot.players.find(p=>p.seat===snapshot.actor_seat);
   let text = snapshot.session_ended ? "本场已结束 · 总结已保存" : snapshot.paused ? "牌局暂停" : snapshot.phase === "playing" ? `${actor?.name || "玩家"} 行动中` : snapshot.phase === "finished" ? "下一手，继续同桌" : "朋友入座后由房主开局";
-  if (snapshot.phase === "playing" && !snapshot.paused && snapshot.deadline) text += ` · ${Math.max(0,Math.ceil(snapshot.deadline-(Date.now()+serverOffset)/1000))}s`;
   $("turnNote").textContent = text;
+  updateCountdown();
   if ($("summaryDialog").open && sessionReport) updateSessionDuration();
   hide("chatTurnNotice",!snapshot.legal);
-  if(snapshot.legal) $("chatTurnNotice").textContent=`轮到你行动了${snapshot.deadline ? ` · 剩 ${Math.max(0,Math.ceil(snapshot.deadline-(Date.now()+serverOffset)/1000))} 秒` : ""} · 返回牌桌 →`;
+  if(snapshot.legal) $("chatTurnNotice").textContent=`轮到你行动了${snapshot.turn_timer?.enabled ? ` · 剩 ${countdownState().seconds} 秒` : ""} · 返回牌桌 →`;
+}
+
+function countdownState() {
+  const timer=snapshot?.turn_timer;
+  const enabled=Boolean(snapshot?.phase==="playing" && timer?.enabled && timerAnchor);
+  const remaining=enabled ? Math.max(0,timerAnchor.remaining-(timerAnchor.paused ? 0 : (performance.now()-timerAnchor.at)/1000)) : 0;
+  const seconds=Math.ceil(remaining), paused=Boolean(enabled && timerAnchor.paused);
+  return {enabled,remaining,seconds,paused,expired:enabled && !paused && remaining<=0,
+    ratio:enabled ? Math.max(0,Math.min(100,remaining/timer.duration*100)) : 0,
+    label:`${String(Math.floor(seconds/60)).padStart(2,"0")}:${String(seconds%60).padStart(2,"0")}`};
+}
+function updateCountdown() {
+  const active=snapshot.phase==="playing", timer=countdownState();
+  $("timerRuleLabel").textContent=snapshot.settings.turn_seconds ? `行动限时 ${snapshot.settings.turn_seconds} 秒` : "行动不限时";
+  hide("turnTimer",!active);
+  const actor=snapshot.players.find(p=>p.seat===snapshot.actor_seat);
+  const mine=actor?.id===snapshot.me;
+  $("turnTimerActor").textContent=snapshot.paused ? `牌局暂停 · ${actor?.name || "玩家"}` : mine ? "轮到你行动" : `${actor?.name || "玩家"} 行动中`;
+  $("turnTimerValue").textContent=timer.enabled ? timer.label : "不限时";
+  $("turnTimerHint").textContent=!connectionOK ? "连接中断，以重连后的牌局为准" : snapshot.paused ? timer.enabled ? "剩余时间已保留，继续后接着倒数" : "牌局已暂停，继续后恢复行动" : timer.expired ? "时间到，正在同步服务器结果…" : timer.enabled ? `每次 ${snapshot.settings.turn_seconds} 秒 · 超时自动过牌或弃牌` : "房主可在两手之间开启行动计时";
+  hide("turnTimerTrack",!timer.enabled);
+  $("turnTimerTrack").setAttribute("aria-valuemax",String(snapshot.settings.turn_seconds));
+  $("turnTimerTrack").setAttribute("aria-valuenow",String(timer.seconds));
+  $("turnTimerTrack").setAttribute("aria-valuetext",timer.paused ? `已暂停，剩余 ${timer.seconds} 秒` : `剩余 ${timer.seconds} 秒`);
+  hide("myTurnTimer",!active || !mine || !timer.enabled);
+  $("myTimerLabel").textContent=timer.paused ? "已暂停 · 保留剩余时间" : timer.expired ? "时间已到 · 等待同步" : "你的行动倒计时";
+  $("myTimerValue").textContent=timer.label;
+  const seat=$("seatClock");
+  if(seat)$("seatTimerValue").textContent=timer.paused ? `暂停 ${timer.label}` : `⏱ ${timer.label}`;
+  for(const element of [$("turnTimer"),$("myTurnTimer"),seat].filter(Boolean)) {
+    element.style.setProperty("--time-left",`${timer.ratio}%`);
+    element.classList.toggle("paused",snapshot.paused);
+    element.classList.toggle("warning",timer.enabled && !timer.paused && timer.seconds<=10);
+    element.classList.toggle("urgent",timer.enabled && !timer.paused && timer.seconds<=5);
+  }
+  const key=`${snapshot.hand_number}:${snapshot.actions.length}:${snapshot.actor_seat}`;
+  if(!active || !timer.enabled || timer.paused || !mine || timer.seconds===0 || timer.seconds>10) {
+    if($("timerAnnouncement").textContent)$("timerAnnouncement").textContent="";
+  }
+  if(timer.enabled && !timer.paused && mine && timer.seconds>0 && timer.seconds<=10 && countdownNoticeKey!==key) {
+    countdownNoticeKey=key;
+    $("timerAnnouncement").textContent=`你的行动时间还剩 ${timer.seconds} 秒，超时自动过牌或弃牌。`;
+  }
+  updateEnabled();
+  if(timer.expired && connectionOK && timeoutSyncKey!==key) {timeoutSyncKey=key;poll();}
 }
 
 function updateChatControls() {
@@ -517,6 +566,7 @@ function startPolling() {
 }
 async function send(command, data={}) {
   if (busy) return;
+  if(command==="act" && countdownState().expired) {toast("行动时间已到，正在同步牌局。");poll();return;}
   busy = true; updateEnabled();
   try {
     const result = await request(`/api/rooms/${code}/${command}`, {...data,version:snapshot.version});
@@ -531,6 +581,7 @@ async function send(command, data={}) {
 function setupWelcome() {
   if (code) {
     hide("sizeField",true);
+    hide("timerField",true);
     $("entryEyebrow").textContent = "YOU'RE INVITED";
     $("entryTitle").textContent = "朋友给你留了位。";
     $("entryDescription").textContent = invite ? "输入昵称，加入这张私人牌桌。" : "需要完整邀请链接才能加入。请向房主索取链接。";
@@ -544,7 +595,7 @@ $("entryForm").addEventListener("submit",async event=>{
   busy=true; $("entrySubmit").disabled=true;
   try {
     const name=$("nickname").value.trim();
-    const result=await request(code ? `/api/rooms/${code}/join` : "/api/rooms", code ? {name,invite} : {name,max_players:Number($("tableSize").value)},false);
+    const result=await request(code ? `/api/rooms/${code}/join` : "/api/rooms", code ? {name,invite} : {name,max_players:Number($("tableSize").value),turn_seconds:Number($("entryTurnSeconds").value)},false);
     code=result.room.code; token=result.token; invite=result.room.invite;
     storage[code]={token,name}; saveStorage();
     history.replaceState({},"",`/rooms/${code}#invite=${invite}`);

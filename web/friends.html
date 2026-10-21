@@ -32,10 +32,11 @@
         <label for="nickname">怎么称呼你</label>
         <input id="nickname" name="nickname" maxlength="16" placeholder="输入你的牌桌昵称" autocomplete="nickname" required>
         <div id="sizeField" class="size-field"><label for="tableSize">牌桌人数</label><select id="tableSize"><option value="2">2 人桌</option><option value="3">3 人桌</option><option value="4">4 人桌</option><option value="5">5 人桌</option><option value="6" selected>6 人桌</option><option value="7">7 人桌</option><option value="8">8 人桌</option><option value="9">9 人桌</option><option value="10">10 人桌</option><option value="11">11 人桌</option></select></div>
+        <div id="timerField" class="size-field"><label for="entryTurnSeconds">每次行动时限</label><select id="entryTurnSeconds"><option value="15">15 秒</option><option value="30" selected>30 秒</option><option value="60">60 秒</option><option value="120">2 分钟</option><option value="300">5 分钟</option><option value="0">不限时</option></select></div>
         <button class="primary full" id="entrySubmit" type="submit">创建私人牌桌 <span>↗</span></button>
       </form>
       <div id="savedRooms" class="saved-rooms"></div>
-      <div class="entry-note"><span>♧</span><p>小盲 1 / 大盲 2，无前注，买入 1,000 筹码。<br>房主可调整规则，默认不限行动时间。</p></div>
+      <div class="entry-note"><span>♧</span><p>小盲 1 / 大盲 2，无前注，买入 1,000 筹码。<br>默认每次行动 30 秒，可调整或关闭。<br>超时自动过牌，需要跟注时自动弃牌。</p></div>
       <p class="fine-print">虚拟筹码 · 朋友间娱乐</p>
     </section>
   </main>
@@ -45,7 +46,9 @@
     <div class="room-grid">
       <section class="play-area">
         <div class="table-topline"><span id="blindInfo"></span><span id="handInfo"></span></div>
-        <div class="position-legend"><span>D 庄家</span><span>SB 小盲</span><span>BB 大盲</span><span>UTG 枪口</span><span>HJ / CO 后位</span></div>
+        <div class="position-legend"><span>D 庄家</span><span>SB 小盲</span><span>BB 大盲</span><span>UTG 枪口</span><span>HJ / CO 后位</span><span id="timerRuleLabel"></span></div>
+        <section id="turnTimer" class="turn-timer hidden" aria-label="当前行动倒计时"><div class="turn-timer-heading"><div><span id="turnTimerActor"></span><small id="turnTimerHint"></small></div><output id="turnTimerValue" role="timer" aria-live="off">00:30</output></div><div id="turnTimerTrack" class="countdown-track" role="progressbar" aria-label="剩余行动时间" aria-valuemin="0"><i></i></div></section>
+        <span id="timerAnnouncement" class="sr-only" role="status"></span>
         <div class="table" id="table">
           <div class="felt-ring"></div><div class="table-watermark">同 桌<span>THE PRIVATE TABLE</span></div>
           <div class="community"><div class="pot-label" id="potLabel">等待朋友入座</div><div class="board" id="board"></div><div class="turn-note" id="turnNote" role="status"></div></div>
@@ -53,6 +56,7 @@
         </div>
         <section class="action-panel" id="actionPanel" aria-label="牌局操作">
           <div class="action-panel-heading"><div id="tableMessage" class="table-message"></div><button id="actionChatBtn" class="text-button">聊天 <span class="chat-unread hidden" aria-hidden="true"></span></button></div>
+          <div id="myTurnTimer" class="my-turn-timer hidden"><span id="myTimerLabel">你的行动倒计时</span><b id="myTimerValue">00:30</b><div class="countdown-track"><i></i></div></div>
           <div id="betActions" class="hidden">
             <div class="action-buttons"><button id="foldBtn" class="fold">弃牌 <kbd>F</kbd></button><button id="callBtn" class="primary"><span id="callLabel">过牌</span> <kbd>C</kbd></button></div>
             <div class="bet-presets" aria-label="快捷选择下注金额">
@@ -79,7 +83,7 @@
         <section class="side-card"><div class="section-head"><h2>牌桌动态</h2><span id="playerCount">1 / 6</span></div><div id="actionLog" class="action-log" aria-live="polite"></div></section>
         <section class="side-card"><div class="section-head"><h2>我的座位</h2><button id="renameBtn" class="text-button">改昵称</button></div><div class="my-summary"><span id="myName"></span><b id="myStack"></b></div><div class="summary-line"><span>累计买入</span><span id="myBuyin"></span></div><div class="summary-line"><span>当前盈亏</span><span id="myNet"></span></div><div class="seat-controls"><button id="rebuyBtn" class="secondary">补码</button><button id="leaveBtn" class="text-button">离开牌桌</button></div><p class="micro">刷新或掉线后，在同一浏览器打开房间即可回到座位。请勿清除本地数据。</p></section>
         <section class="side-card" id="hostPanel"><div class="section-head"><h2>房主管理</h2><button id="pauseBtn" class="text-button hidden">暂停牌局</button></div>
-          <details id="settingsDetails"><summary>牌桌规则 <span>⌄</span></summary><form id="settingsForm" class="settings-form"><label>牌桌人数<select name="max_players"><option value="2">2 人桌</option><option value="3">3 人桌</option><option value="4">4 人桌</option><option value="5">5 人桌</option><option value="6" selected>6 人桌</option><option value="7">7 人桌</option><option value="8">8 人桌</option><option value="9">9 人桌</option><option value="10">10 人桌</option><option value="11">11 人桌</option></select></label><div class="two-fields"><label>小盲<input name="sb" type="number" min="1" max="100000" required></label><label>大盲<input name="bb" type="number" min="2" max="200000" required></label></div><label>每次买入筹码<input name="starting_stack" type="number" min="2" max="10000000" required></label><label>每步行动时间<select name="turn_seconds"><option value="0">不限时间</option><option value="30">30 秒</option><option value="60">60 秒</option><option value="120">120 秒</option><option value="300">5 分钟</option></select></label><button class="secondary full" type="submit">保存规则</button><p class="micro">两手之间可以修改规则。启用计时后，超时自动过牌或弃牌。</p></form></details>
+          <details id="settingsDetails"><summary>牌桌规则 <span>⌄</span></summary><form id="settingsForm" class="settings-form"><label>牌桌人数<select name="max_players"><option value="2">2 人桌</option><option value="3">3 人桌</option><option value="4">4 人桌</option><option value="5">5 人桌</option><option value="6" selected>6 人桌</option><option value="7">7 人桌</option><option value="8">8 人桌</option><option value="9">9 人桌</option><option value="10">10 人桌</option><option value="11">11 人桌</option></select></label><div class="two-fields"><label>小盲<input name="sb" type="number" min="1" max="100000" required></label><label>大盲<input name="bb" type="number" min="2" max="200000" required></label></div><label>每次买入筹码<input name="starting_stack" type="number" min="2" max="10000000" required></label><label>每步行动时间<select name="turn_seconds"><option value="0">不限时间</option><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">60 秒</option><option value="120">120 秒</option><option value="300">5 分钟</option></select></label><button class="secondary full" type="submit">保存规则</button><p class="micro">两手之间可以修改规则。启用计时后，超时自动过牌或弃牌。</p></form></details>
         </section>
         <section class="side-card"><div class="section-head"><h2>牌局记录</h2><span>最近 50 手</span></div><div id="history" class="history"></div></section>
         <section class="side-card table-rules"><details><summary>本桌采用的规则 <span>⌄</span></summary><p>52 张牌，每人 2 张底牌，从底牌和公共牌的 7 张中选最强 5 张。单次发牌，不抽水、不收前注。</p><p>加注输入本轮总额；最小加注增量等于本轮上一次完整下注或加注增量。未达到完整加注的全下，不一定重新开放加注权。</p><p>不足跟注时可全下；按实际投入分别结算主池、边池，退回无人跟注的部分。平分后的零头从庄家左侧有资格的赢家开始分配。</p><p>正常轮转采用移动庄家：每手移到下一位有筹码的玩家。两人时庄家下小盲，翻牌前先行动，翻牌后后行动。新加入者下一手入局，补码在两手之间进行。</p><p>摊牌自动亮出结算需要的底牌；弃牌不公开。不限时是默认规则，可由房主启用超时过牌或弃牌。</p></details></section>

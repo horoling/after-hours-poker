@@ -751,6 +751,103 @@ class PrivateRoomTests(unittest.TestCase):
         self.assertNotEqual(fresh["player_id"],old["player_id"])
         self.assertEqual(len(self.chat_history().get_json()["messages"]),2)
 
+    def timed_room(self, count=2, seconds=30):
+        self.req("settings",sb=1,bb=2,starting_stack=1000,turn_seconds=seconds)
+        self.join(count-1)
+        return self.start()
+
+    def test_countdown_default_and_create_time_options(self):
+        room=self.client.post("/api/rooms",json={"name":"默认倒计时"}).get_json()["room"]
+        self.assertEqual(room["settings"]["turn_seconds"],30)
+        self.assertEqual(room["turn_timer"],dict(enabled=False,duration=30,remaining=None,paused=False))
+        for seconds in (0,15,60,120,300):
+            result=self.client.post("/api/rooms",json={"name":"自选时限","turn_seconds":seconds})
+            self.assertEqual(result.status_code,201)
+            self.assertEqual(result.get_json()["room"]["settings"]["turn_seconds"],seconds)
+        for seconds in (-1,601,True,"30"):
+            self.assertEqual(self.client.post("/api/rooms",json={"name":"无效时限","turn_seconds":seconds}).status_code,400)
+
+    def test_countdown_refresh_and_restart_do_not_reset_deadline(self):
+        base=time.time()
+        with patch("private_rooms.time.time",return_value=base):
+            first=self.timed_room()
+        self.assertEqual(first["turn_timer"]["remaining"],30)
+        with patch("private_rooms.time.time",return_value=base+11):
+            refreshed=self.req().get_json()
+            restarted=self.req(client=create_app(self.config).test_client()).get_json()
+        self.assertEqual(first["deadline"],refreshed["deadline"])
+        self.assertEqual(refreshed["turn_timer"]["remaining"],19)
+        self.assertEqual(refreshed["turn_timer"],restarted["turn_timer"])
+        self.assertEqual(refreshed["actions"],[])
+        self.assertEqual(refreshed["version"],first["version"])
+
+    def test_countdown_pause_keeps_remaining_and_resume_continues(self):
+        base=time.time()
+        with patch("private_rooms.time.time",return_value=base):
+            self.timed_room()
+        with patch("private_rooms.time.time",return_value=base+13):
+            paused=self.req("pause").get_json()
+        self.assertEqual(paused["turn_timer"]["remaining"],17)
+        self.assertTrue(paused["turn_timer"]["paused"])
+        with patch("private_rooms.time.time",return_value=base+500):
+            still=self.req().get_json()
+            self.assertEqual(still["turn_timer"],paused["turn_timer"])
+            self.assertEqual(still["actions"],[])
+            resumed=self.req("pause").get_json()
+        self.assertFalse(resumed["turn_timer"]["paused"])
+        self.assertEqual(resumed["deadline"],base+517)
+        with patch("private_rooms.time.time",return_value=base+510):
+            self.assertEqual(self.req().get_json()["turn_timer"]["remaining"],7)
+
+    def test_countdown_timeout_fold_is_once_under_concurrent_polls(self):
+        base=time.time()
+        with patch("private_rooms.time.time",return_value=base):
+            first=self.timed_room(count=3)
+        def read(_):
+            return self.req(client=self.app.test_client()).get_json()
+        with patch("private_rooms.time.time",return_value=base+31):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results=list(pool.map(read,range(2)))
+        for state in results:
+            self.assertEqual(state["version"],first["version"]+1)
+            self.assertEqual(len(state["actions"]),1)
+            self.assertTrue(state["actions"][0]["automatic"])
+            self.assertEqual(state["actions"][0]["kind"],"fold")
+            self.assertEqual(state["turn_timer"]["remaining"],30)
+            self.assertNotEqual(state["actor_seat"],first["actor_seat"])
+
+    def test_countdown_timeout_checks_when_free_and_stops_after_settlement(self):
+        base=time.time()
+        with patch("private_rooms.time.time",return_value=base):
+            self.timed_room()
+            self.action("call")
+            self.action("call")
+        with patch("private_rooms.time.time",return_value=base+31):
+            state=self.req().get_json()
+        self.assertEqual(state["actions"][-1]["kind"],"call")
+        self.assertEqual(state["actions"][-1]["label"],"过牌")
+        self.assertTrue(state["actions"][-1]["automatic"])
+        with patch("private_rooms.time.time",return_value=base+32):
+            final=self.play_calls()
+        self.assertEqual(final["phase"],"finished")
+        self.assertFalse(final["turn_timer"]["enabled"])
+        self.assertIsNone(final["turn_timer"]["remaining"])
+        self.assertIsNone(final["deadline"])
+
+    def test_countdown_chat_does_not_extend_turn_and_next_actor_gets_full_time(self):
+        base=time.time()
+        with patch("private_rooms.time.time",return_value=base):
+            first=self.timed_room()
+        with patch("private_rooms.time.time",return_value=base+9):
+            self.assertEqual(self.chat("聊天不延长时间").status_code,201)
+            after_chat=self.req().get_json()
+            self.assertEqual(after_chat["deadline"],first["deadline"])
+            self.assertEqual(after_chat["turn_timer"]["remaining"],21)
+            self.assertEqual(after_chat["version"],first["version"])
+            next_turn=self.action("call")
+        self.assertEqual(next_turn["turn_timer"]["remaining"],30)
+        self.assertEqual(next_turn["deadline"],base+39)
+
 
 if __name__ == "__main__":
     unittest.main()

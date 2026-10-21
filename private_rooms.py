@@ -244,6 +244,7 @@ def finish_if_needed(room, state):
 
 def set_deadline(room):
     seconds = room["settings"]["turn_seconds"]
+    room["hand"].pop("remaining", None)
     room["hand"]["deadline"] = time.time() + seconds if seconds else None
 
 
@@ -278,6 +279,7 @@ def tick(room):
 
 
 def view(room, player, state=None):
+    now = time.time()
     hand = room["hand"]
     if hand is not None and state is None:
         state = build_state(hand)
@@ -310,6 +312,14 @@ def view(room, player, state=None):
     actor_seat = hand["seats"][state.actor_index] if state and state.actor_index is not None else None
     if state and state.status and actor_seat == player["seat"] and not room["paused"]:
         legal = betting_options(state)
+    duration = room["settings"]["turn_seconds"]
+    timed = bool(state and state.status and duration)
+    remaining = None
+    if timed:
+        remaining = (hand.get("remaining") if room["paused"] else
+                     max(0, hand["deadline"] - now) if hand["deadline"] is not None else 0)
+    timer = dict(enabled=timed, duration=duration,
+                 remaining=remaining, paused=bool(timed and room["paused"]))
     return dict(code=room["code"], invite=room["invite"], me=player["id"],
                 owner=room["owner"], settings=room["settings"], players=seats,
                 version=room["version"], paused=room["paused"],
@@ -320,7 +330,7 @@ def view(room, player, state=None):
                 pot=state.total_pot_amount if state else 0,
                 street=STREETS[state.street_index] if state and state.street_index is not None else "等待开局" if not state else "本手结束",
                 deadline=hand["deadline"] if hand else None,
-                server_time=time.time(), legal=legal,
+                server_time=now, legal=legal, turn_timer=timer,
                 actions=hand["actions"] if hand else [], history=room["history"],
                 session_ended=room["session"]["ended_at"] is not None,
                 chat_version=room["chat_version"])
@@ -343,10 +353,11 @@ def room_asset(filename):
 def create_room():
     data = body()
     capacity = integer(data.get("max_players", 6), "座位数", 2, MAX_PLAYERS)
+    turn_seconds = integer(data.get("turn_seconds", 30), "行动时间", 0, 600)
     player, token = new_player(data.get("name"), 0, 1000)
     code = secrets.token_hex(5).upper()
     room = dict(code=code, invite=secrets.token_urlsafe(24), owner=player["id"],
-                players=[player], settings=dict(sb=1, bb=2, starting_stack=1000, turn_seconds=0,
+                players=[player], settings=dict(sb=1, bb=2, starting_stack=1000, turn_seconds=turn_seconds,
                                                 max_players=capacity),
                 version=1, hand=None, dealer=-1, paused=False, history=[],
                 chat=[], chat_version=0)
