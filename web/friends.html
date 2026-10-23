@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#102c27">
   <meta name="referrer" content="no-referrer">
   <title>After Hours · 夜局</title>
-  <meta name="description" content="After Hours · 夜局，属于朋友的私人德州牌桌。2–11 人自由组局，支持聊天、行动倒计时与整场统计。">
+  <meta name="description" content="After Hours · 夜局。邀请制德州牌桌，支持 2–11 人、Agent 玩家、房间聊天与整场统计。">
   <link rel="stylesheet" href="/friends-assets/friends.css">
   <script defer src="/friends-assets/friends.js"></script>
 </head>
@@ -18,32 +18,32 @@
 
   <main id="welcome" class="welcome">
     <section class="intro">
-      <div class="eyebrow">GOOD CARDS. GREAT COMPANY.</div>
-      <h1>朋友到齐，<br>就<span>开一桌。</span></h1>
-      <p>不管相隔多远，还是熟悉的那几个人。<br>一张邀请链接，一场属于你们的牌局。</p>
-      <div class="intro-tags"><span>2–11 人自由开桌</span><span>无广告</span><span>自由计时</span></div>
+      <div class="eyebrow">PRIVATE HOLD’EM</div>
+      <h1>夜局<span class="intro-title-en">After Hours</span></h1>
+      <p>私人牌桌，凭邀请入席。</p>
+      <div class="intro-tags"><span>2–11 人</span><span>邀请制</span><span>可设时限</span></div>
       <div class="card-art" aria-hidden="true"><div class="art-card ace">A<small>♠</small><b>♠</b></div><div class="art-card king">K<small>♥</small><b>♥</b></div><span class="art-chip">夜局</span></div>
-      <div class="intro-foot">NO RAKE. NO RUSH. JUST FRIENDS.</div>
+      <div class="intro-foot">TEXAS HOLD’EM · PRIVATE TABLES</div>
     </section>
     <section class="entry-panel">
-      <div class="eyebrow" id="entryEyebrow">YOUR TABLE IS WAITING</div>
-      <h2 id="entryTitle">今晚，你来组局。</h2>
-      <p class="muted" id="entryDescription">创建牌桌，把链接发到朋友群里。</p>
+      <div class="eyebrow" id="entryEyebrow">NEW TABLE</div>
+      <h2 id="entryTitle">创建牌桌</h2>
+      <p class="muted" id="entryDescription">设定人数与时限，生成邀请链接。</p>
       <form id="entryForm">
-        <label for="nickname">怎么称呼你</label>
-        <input id="nickname" name="nickname" maxlength="16" placeholder="输入你的牌桌昵称" autocomplete="nickname" required>
+        <label for="nickname">牌桌昵称</label>
+        <input id="nickname" name="nickname" maxlength="16" placeholder="输入昵称" autocomplete="nickname" required>
         <div id="sizeField" class="size-field"><label for="tableSize">牌桌人数</label><select id="tableSize"><option value="2">2 人桌</option><option value="3">3 人桌</option><option value="4">4 人桌</option><option value="5">5 人桌</option><option value="6" selected>6 人桌</option><option value="7">7 人桌</option><option value="8">8 人桌</option><option value="9">9 人桌</option><option value="10">10 人桌</option><option value="11">11 人桌</option></select></div>
         <div id="timerField" class="size-field"><label for="entryTurnSeconds">每次行动时限</label><select id="entryTurnSeconds"><option value="15">15 秒</option><option value="30" selected>30 秒</option><option value="60">60 秒</option><option value="120">2 分钟</option><option value="300">5 分钟</option><option value="0">不限时</option></select></div>
-        <button class="primary full" id="entrySubmit" type="submit">创建私人牌桌 <span>↗</span></button>
+        <button class="primary full" id="entrySubmit" type="submit">创建牌桌 <span>↗</span></button>
       </form>
       <div id="savedRooms" class="saved-rooms"></div>
       <div class="entry-note"><span>♧</span><p>小盲 1 / 大盲 2，无前注，买入 1,000 筹码。<br>默认每次行动 30 秒，可调整或关闭。<br>超时自动过牌，需要跟注时自动弃牌。</p></div>
-      <p class="fine-print">虚拟筹码 · 朋友间娱乐</p>
+      <p class="fine-print">虚拟筹码 · 仅供娱乐</p>
     </section>
   </main>
 
   <main id="room" class="room hidden">
-    <div class="room-heading"><div><div class="eyebrow">YOUR PRIVATE TABLE</div><h1>好朋友，同一桌。<span id="roomCode"></span></h1></div><div class="heading-actions"><button id="chatBtn" class="secondary">聊天 <span class="chat-unread hidden" aria-hidden="true"></span></button><button id="summaryBtn" class="primary">整场统计</button><button id="inviteBtn" class="secondary">复制邀请链接 ↗</button></div></div>
+    <div class="room-heading"><div><div class="eyebrow">PRIVATE TABLE</div><h1>夜局<span id="roomCode"></span></h1></div><div class="heading-actions"><button id="chatBtn" class="secondary">聊天 <span class="chat-unread hidden" aria-hidden="true"></span></button><button id="summaryBtn" class="primary">整场统计</button><button id="inviteBtn" class="secondary">复制邀请链接 ↗</button></div></div>
     <div class="room-grid">
       <section class="play-area">
         <div class="table-topline"><span id="blindInfo"></span><span id="handInfo"></span></div>
@@ -52,7 +52,7 @@
         <span id="timerAnnouncement" class="sr-only" role="status"></span>
         <div class="table" id="table">
           <div class="felt-ring"></div><div class="table-watermark">夜 局<span>AFTER HOURS</span></div>
-          <div class="community"><div class="pot-label" id="potLabel">等待朋友入座</div><div class="board" id="board"></div><div class="turn-note" id="turnNote" role="status"></div></div>
+          <div class="community"><div class="pot-label" id="potLabel">等待玩家入席</div><div class="board" id="board"></div><div class="turn-note" id="turnNote" role="status"></div></div>
           <div id="seats"></div>
         </div>
         <section class="action-panel" id="actionPanel" aria-label="牌局操作">
@@ -86,38 +86,38 @@
         <section class="side-card" id="hostPanel"><div class="section-head"><h2>房主管理</h2><button id="pauseBtn" class="text-button hidden">暂停牌局</button></div>
           <details id="settingsDetails"><summary>牌桌规则 <span>⌄</span></summary><form id="settingsForm" class="settings-form"><label>牌桌人数<select name="max_players"><option value="2">2 人桌</option><option value="3">3 人桌</option><option value="4">4 人桌</option><option value="5">5 人桌</option><option value="6" selected>6 人桌</option><option value="7">7 人桌</option><option value="8">8 人桌</option><option value="9">9 人桌</option><option value="10">10 人桌</option><option value="11">11 人桌</option></select></label><div class="two-fields"><label>小盲<input name="sb" type="number" min="1" max="100000" required></label><label>大盲<input name="bb" type="number" min="2" max="200000" required></label></div><label>每次买入筹码<input name="starting_stack" type="number" min="2" max="10000000" required></label><label>每步行动时间<select name="turn_seconds"><option value="0">不限时间</option><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">60 秒</option><option value="120">120 秒</option><option value="300">5 分钟</option></select></label><button class="secondary full" type="submit">保存规则</button><p class="micro">两手之间可以修改规则。启用计时后，超时自动过牌或弃牌。</p></form></details>
         </section>
-        <section class="side-card" id="agentPanel"><div class="section-head"><h2>Agent 陪打</h2><span>GTO-lite</span></div><p class="micro">按位置、牌力与公开下注决策，只看自己的底牌和公开信息。所有玩家都能看到 Agent 标识。</p><div id="agentList" class="agent-list"></div><form id="agentForm" class="agent-form"><label for="agentCount">添加数量</label><div class="agent-add-row"><select id="agentCount" aria-label="添加 Agent 数量"></select><button id="addAgentBtn" class="secondary" type="submit">添加 Agent</button></div></form><p id="agentHint" class="micro" role="status"></p></section>
+        <section class="side-card" id="agentPanel"><div class="section-head"><h2>Agent 陪打</h2><span>GTO-lite</span></div><p class="micro">仅使用自己的底牌与公开信息决策。Agent 身份对全桌可见。</p><div id="agentList" class="agent-list"></div><form id="agentForm" class="agent-form"><label for="agentCount">添加数量</label><div class="agent-add-row"><select id="agentCount" aria-label="添加 Agent 数量"></select><button id="addAgentBtn" class="secondary" type="submit">添加 Agent</button></div></form><p id="agentHint" class="micro" role="status"></p></section>
         <section class="side-card"><div class="section-head"><h2>牌局记录</h2><span>最近 50 手</span></div><div id="history" class="history"></div></section>
-        <section class="side-card table-rules"><details><summary>本桌采用的规则 <span>⌄</span></summary><p>52 张牌，每人 2 张底牌，从底牌和公共牌的 7 张中选最强 5 张。单次发牌，不抽水、不收前注。</p><p>加注输入本轮总额；最小加注增量等于本轮上一次完整下注或加注增量。未达到完整加注的全下，不一定重新开放加注权。</p><p>不足跟注时可全下；按实际投入分别结算主池、边池，退回无人跟注的部分。平分后的零头从庄家左侧有资格的赢家开始分配。</p><p>正常轮转采用移动庄家：每手移到下一位有筹码的玩家。两人时庄家下小盲，翻牌前先行动，翻牌后后行动。新加入者下一手入局，补码在两手之间进行。</p><p>摊牌自动亮出结算需要的底牌；弃牌不公开。不限时是默认规则，可由房主启用超时过牌或弃牌。</p></details></section>
+        <section class="side-card table-rules"><details><summary>本桌采用的规则 <span>⌄</span></summary><p>52 张牌，每人 2 张底牌，从底牌和公共牌的 7 张中选最强 5 张。单次发牌，不抽水、不收前注。</p><p>加注输入本轮总额；最小加注增量等于本轮上一次完整下注或加注增量。未达到完整加注的全下，不一定重新开放加注权。</p><p>不足跟注时可全下；按实际投入分别结算主池、边池，退回无人跟注的部分。平分后的零头从庄家左侧有资格的赢家开始分配。</p><p>正常轮转采用移动庄家：每手移到下一位有筹码的玩家。两人时庄家下小盲，翻牌前先行动，翻牌后后行动。新加入者下一手入局，补码在两手之间进行。</p><p>摊牌自动亮出结算需要的底牌；弃牌不公开。默认行动时限为 30 秒，可由房主调整或关闭；超时自动过牌或弃牌。</p></details></section>
       </aside>
     </div>
   </main>
   <dialog id="chatDialog" class="chat-dialog" aria-labelledby="chatTitle">
-    <div class="chat-heading"><div><div class="eyebrow">AFTER HOURS · TABLE TALK</div><h2 id="chatTitle">夜局聊两句</h2></div><button id="closeChat" class="secondary" aria-label="关闭聊天，返回牌桌">返回牌桌</button></div>
+    <div class="chat-heading"><div><div class="eyebrow">TABLE CHAT</div><h2 id="chatTitle">牌桌聊天</h2></div><button id="closeChat" class="secondary" aria-label="关闭聊天，返回牌桌">返回牌桌</button></div>
     <p class="micro chat-retention">仅本房间成员可见 · 保留最近 200 条</p>
     <button id="chatTurnNotice" class="chat-turn-notice hidden">轮到你行动了 · 返回牌桌 →</button>
-    <div id="chatMessages" class="chat-messages" role="log" aria-label="房间聊天记录" aria-relevant="additions" tabindex="0"><p class="chat-empty">还没有消息，和朋友打个招呼吧。</p></div>
+    <div id="chatMessages" class="chat-messages" role="log" aria-label="房间聊天记录" aria-relevant="additions" tabindex="0"><p class="chat-empty">暂无消息</p></div>
     <button id="chatLatestBtn" class="chat-latest hidden" type="button">有新消息 · 回到最新 ↓</button>
     <p id="chatStatus" class="chat-status" role="status"></p>
-    <form id="chatForm" class="chat-form"><label class="chat-input-label" for="chatInput">发送文字消息</label><div class="chat-compose"><textarea id="chatInput" rows="2" maxlength="600" placeholder="和这桌朋友聊两句…" enterkeyhint="send"></textarea><button id="chatSendBtn" class="primary" type="submit">发送</button></div><div class="chat-input-hint"><span class="chat-key-hint">Enter 发送 · Shift + Enter 换行</span><span id="chatCharCount">0 / 300</span></div></form>
+    <form id="chatForm" class="chat-form"><label class="chat-input-label" for="chatInput">发送文字消息</label><div class="chat-compose"><textarea id="chatInput" rows="2" maxlength="600" placeholder="输入消息…" enterkeyhint="send"></textarea><button id="chatSendBtn" class="primary" type="submit">发送</button></div><div class="chat-input-hint"><span class="chat-key-hint">Enter 发送 · Shift + Enter 换行</span><span id="chatCharCount">0 / 300</span></div></form>
   </dialog>
   <dialog id="summaryDialog" class="session-dialog" aria-labelledby="summaryTitle">
-    <div class="report-heading"><div><div class="eyebrow">THE NIGHT IN NUMBERS</div><h2 id="summaryTitle">整场统计</h2></div><button id="closeSummary" class="secondary" aria-label="关闭整场统计">关闭</button></div>
+    <div class="report-heading"><div><div class="eyebrow">SESSION REPORT</div><h2 id="summaryTitle">整场统计</h2></div><button id="closeSummary" class="secondary" aria-label="关闭整场统计">关闭</button></div>
     <p id="summaryStatus" class="report-status" role="status">正在读取统计…</p>
     <div id="summaryContent" class="hidden">
       <div class="report-metrics"><div><span>整场时长</span><b id="sessionDuration"></b></div><div><span>已结算</span><b id="sessionHands"></b></div><div><span>最大底池</span><b id="sessionMaxPot"></b></div><div><span>累计买入</span><b id="sessionBuyin"></b></div></div>
       <p id="sessionTimes" class="micro"></p>
       <section class="report-section"><div class="section-head"><h3 id="rankingTitle">全桌盈亏榜</h3><span>虚拟筹码 · 可左右滑动</span></div><div class="ranking-scroll" tabindex="0" role="region" aria-label="全桌盈亏账目，可左右滑动"><table class="ranking-table"><thead><tr><th scope="col">玩家</th><th scope="col">净盈亏</th><th scope="col">买入</th><th scope="col">桌上／带出</th><th scope="col">参与</th><th scope="col">获胜</th></tr></thead><tbody id="rankingRows"></tbody></table></div><p id="accountingCheck" class="micro"></p></section>
       <section class="report-section"><div class="section-head"><h3>盈亏曲线</h3><span>点击玩家可隐藏曲线</span></div><div id="profitChart" class="profit-chart"></div><div class="chart-scrubber"><label for="chartHand">查看进度</label><input id="chartHand" type="range" min="0" step="1"><output id="chartHandLabel" for="chartHand"></output></div><div id="chartLegend" class="chart-legend"></div></section>
-      <section class="report-section"><h3>最大底池这一手</h3><div id="largestPotDetail" class="largest-pot"></div></section>
+      <section class="report-section"><h3>最大底池</h3><div id="largestPotDetail" class="largest-pot"></div></section>
       <p class="report-explanation">只统计已结算的手牌；正在进行的下注不影响账目。参与＝实际获发底牌；获胜＝分到任一主池或边池，每手最多计一次，含平分，不等于本手净盈利。底池不含无人跟注退回的筹码。时长从第一手开始，包含暂停和手间等待。离桌重新加入会单列新记录。</p>
       <div class="report-footer"><div class="export-actions"><button id="exportSummary" class="secondary">导出总账 CSV</button><button id="exportHands" class="secondary">导出逐手 CSV</button></div><button id="endSessionBtn" class="end-session">结束本场</button></div>
       <p id="endSessionHint" class="micro"></p>
     </div>
   </dialog>
-  <dialog id="endDialog" aria-labelledby="endTitle"><h2 id="endTitle">结束今晚的牌局？</h2><p class="muted">所有已结算手牌会汇总为最终账单。结束后不能继续开牌、补码或修改账目；下一场请新建房间。</p><div class="dialog-actions"><button id="cancelEnd" class="secondary">继续玩</button><button id="confirmEnd" class="primary">结束并生成总结</button></div></dialog>
+  <dialog id="endDialog" aria-labelledby="endTitle"><h2 id="endTitle">结束本场？</h2><p class="muted">所有已结算手牌会汇总为最终账单。结束后不能继续开牌、补码或修改账目；下一场请新建房间。</p><div class="dialog-actions"><button id="cancelEnd" class="secondary">返回牌桌</button><button id="confirmEnd" class="primary">结束并生成总结</button></div></dialog>
   <div id="toast" class="toast hidden" role="alert"></div>
-  <dialog id="nameDialog"><form id="renameForm"><h2>换个牌桌昵称</h2><label for="newName">新昵称</label><input id="newName" maxlength="16" required><div class="dialog-actions"><button type="button" class="secondary" id="cancelRename">取消</button><button type="submit" class="primary">保存</button></div></form></dialog>
-  <dialog id="inviteDialog"><h2>邀请朋友加入夜局</h2><p class="muted">把完整链接发给朋友，按房间设定的人数入座。</p><label for="inviteLink">私人邀请链接</label><input id="inviteLink" readonly><div class="dialog-actions"><button class="primary" id="closeInvite">完成</button></div></dialog>
+  <dialog id="nameDialog"><form id="renameForm"><h2>修改昵称</h2><label for="newName">新昵称</label><input id="newName" maxlength="16" required><div class="dialog-actions"><button type="button" class="secondary" id="cancelRename">取消</button><button type="submit" class="primary">保存</button></div></form></dialog>
+  <dialog id="inviteDialog"><h2>邀请入席</h2><p class="muted">分享完整邀请链接，其他玩家即可入席。</p><label for="inviteLink">私人邀请链接</label><input id="inviteLink" readonly><div class="dialog-actions"><button class="primary" id="closeInvite">完成</button></div></dialog>
 </body>
 </html>

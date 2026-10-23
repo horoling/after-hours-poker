@@ -94,7 +94,7 @@ function renderSeats() {
     const p = snapshot.players.find(p => p.seat === seat);
     const angle = 2 * Math.PI * ((seat - anchor + capacity) % capacity) / capacity;
     const [x,y] = [50 - 38 * Math.sin(angle), 50 + 39 * Math.cos(angle)];
-    if (!p) return `<div class="seat empty" style="left:${x}%;top:${y}%"><div class="seat-info"><div class="seat-name">空位 ${seat+1}</div><div class="seat-stack">＋</div><div class="seat-status">等待朋友</div></div></div>`;
+    if (!p) return `<div class="seat empty" style="left:${x}%;top:${y}%"><div class="seat-info"><div class="seat-name">空位 ${seat+1}</div><div class="seat-stack">＋</div><div class="seat-status">待入席</div></div></div>`;
     const mine = p.id === snapshot.me, turn = snapshot.phase === "playing" && snapshot.actor_seat === seat;
     const delta = p.delta === null ? "" : ` · ${signed(p.delta)}`;
     const status = p.status === "等待入局" ? "下手入局" : p.status;
@@ -115,7 +115,7 @@ function renderLog() {
     previousStreet = a.street;
     return `${street}<div class="log-row"><b>${esc(players.get(a.seat) || `座位 ${a.seat+1}`)}</b><span>${esc(a.label)}${a.agent ? " · Agent" : a.automatic ? " · 超时" : ""}</span></div>`;
   }).join("");
-  $("actionLog").innerHTML = html || (snapshot.phase === "lobby" ? "把链接发给朋友，入座后由房主开局。" : "底牌已发出，等待第一位玩家行动。");
+  $("actionLog").innerHTML = html || (snapshot.phase === "lobby" ? "分享邀请链接，或添加 Agent。由房主开局。" : "已发底牌，等待行动。");
   $("actionLog").scrollTop = $("actionLog").scrollHeight;
   $("history").innerHTML = snapshot.history.slice().reverse().map(h => `<details><summary>第 ${h.number} 手<span>查看结果</span></summary><p>${esc(h.board.map(c=>c.slice(0,-1).replace("T","10")+SUITS[c.slice(-1)]).join(" ")) || "未发公共牌"}</p>${h.results.map(p=>`<div class="result-row"><span>${esc(p.name)}</span><b class="${p.delta > 0 ? "positive" : p.delta < 0 ? "negative" : ""}">${signed(p.delta)}</b></div>`).join("")}</details>`).join("") || "完整打完一手后，结果会留在这里。";
 }
@@ -124,7 +124,7 @@ function renderActions() {
   hide("betActions", !snapshot.legal);
   $("actionPanel").classList.toggle("your-turn", Boolean(snapshot.legal));
   hide("startBtn", active || !isHost || snapshot.session_ended);
-  $("startBtn").textContent = snapshot.hand_number ? "开始下一手 →" : "朋友入座了，开始第一手 →";
+  $("startBtn").textContent = snapshot.hand_number ? "开始下一手 →" : "开始第一手 →";
   if (snapshot.legal) {
     const legal = snapshot.legal;
     $("callLabel").textContent = legal.call ? `${legal.call >= me.stack ? "全下跟注" : "跟注"} ${num(legal.call)}` : "过牌";
@@ -144,8 +144,8 @@ function renderActions() {
   let message = "";
   if (snapshot.session_ended) message = "本场已结束，最终账单已保存。点击「赛后总结」查看或导出，下一场请创建新房间。";
   else if (snapshot.paused) message = "牌局已暂停，等待房主继续。";
-  else if (snapshot.phase === "lobby") message = `已入座 ${snapshot.players.length} / ${snapshot.settings.max_players} 人。${isHost ? "至少两人有筹码即可开局，也可以等朋友到齐。" : "等待房主开局。"}`;
-  else if (snapshot.phase === "finished") message = `${me.delta === null ? "本手已结束。" : `本手 ${signed(me.delta)} 筹码。`}${isHost ? "准备好后开始下一手。" : "等待房主开始下一手。"} 可在此时补码或离桌。`;
+  else if (snapshot.phase === "lobby") message = `已入座 ${snapshot.players.length} / ${snapshot.settings.max_players} 人。${isHost ? "至少两位玩家有筹码即可开局。" : "等待房主开局。"}`;
+  else if (snapshot.phase === "finished") message = `${me.delta === null ? "本手已结束。" : `本手 ${signed(me.delta)} 筹码。`}${isHost ? "可开始下一手。" : "等待房主开始下一手。"} 可在此时补码或离桌。`;
   else if (me.status === "等待入局") message = "本手已经开始，你将在下一手加入。";
   else if (me.status === "已弃牌") message = "你已弃牌，等待本手结束。";
   else if (me.status === "全下") message = "你已全下，等待牌局结算。";
@@ -164,14 +164,14 @@ function renderAgents() {
   const isHost=snapshot.me===snapshot.owner, agents=snapshot.players.filter(p=>p.is_agent);
   hide("agentPanel", !isHost && agents.length===0);
   hide("agentForm", !isHost);
-  $("agentList").innerHTML=agents.map(p=>`<div class="agent-row"><div><b>${esc(p.name)}</b><small>座位 ${p.seat+1} · ${num(p.stack)} 筹码</small></div>${isHost ? `<div class="agent-controls"><button type="button" class="text-button" data-agent-command="rebuy_agent" data-agent-id="${esc(p.id)}" aria-label="给 ${esc(p.name)} 补码">补码</button><button type="button" class="text-button" data-agent-command="remove_agent" data-agent-id="${esc(p.id)}" aria-label="移除 ${esc(p.name)}">移除</button></div>` : '<span class="agent-badge">AGENT</span>'}</div>`).join("") || '<p class="micro">还没有 Agent，可添加到空座位陪你们玩。</p>';
+  $("agentList").innerHTML=agents.map(p=>`<div class="agent-row"><div><b>${esc(p.name)}</b><small>座位 ${p.seat+1} · ${num(p.stack)} 筹码</small></div>${isHost ? `<div class="agent-controls"><button type="button" class="text-button" data-agent-command="rebuy_agent" data-agent-id="${esc(p.id)}" aria-label="给 ${esc(p.name)} 补码">补码</button><button type="button" class="text-button" data-agent-command="remove_agent" data-agent-id="${esc(p.id)}" aria-label="移除 ${esc(p.name)}">移除</button></div>` : '<span class="agent-badge">AGENT</span>'}</div>`).join("") || '<p class="micro">暂无 Agent，可添加至空座位。</p>';
   const available=snapshot.settings.max_players-snapshot.players.length, select=$("agentCount");
   if(select.options.length!==available) {
     const selected=Number(select.value)||1;
     select.innerHTML=Array.from({length:available},(_,i)=>`<option value="${i+1}">${i+1} 位</option>`).join("");
     select.value=Math.min(selected,available);
   }
-  $("agentHint").textContent=snapshot.session_ended ? "本场已结束，Agent 账目已保留。" : snapshot.phase==="playing" ? "本手进行中；两手之间可添加、移除或补码。" : !isHost ? "由房主在两手之间管理 Agent。" : available ? `还有 ${available} 个空位。Agent 使用本桌买入，补码由房主操作。` : "座位已满，可先移除 Agent 为朋友留位，或扩大牌桌。";
+  $("agentHint").textContent=snapshot.session_ended ? "本场已结束，Agent 账目已保留。" : snapshot.phase==="playing" ? "本手进行中；两手之间可添加、移除或补码。" : !isHost ? "由房主在两手之间管理 Agent。" : available ? `还有 ${available} 个空位。Agent 使用本桌买入，补码由房主操作。` : "座位已满，可移除 Agent 或调整人数。";
 }
 
 function renderSizing(forceAmount = false) {
@@ -261,7 +261,7 @@ function render(next) {
     chatEpoch++; chatMessages=[]; chatCursor=0; chatTarget=0;
     chatReady=false; chatLoading=false; chatSending=false; pendingChat=null;
     lastReadChat=storage[code]?.lastReadChat ?? null;
-    $("chatMessages").innerHTML='<p class="chat-empty">还没有消息，和朋友打个招呼吧。</p>';
+    $("chatMessages").innerHTML='<p class="chat-empty">暂无消息</p>';
   }
   snapshot = next;
   timerAnchor=next.turn_timer?.enabled ? {at:performance.now(),remaining:next.turn_timer.remaining || 0,paused:next.turn_timer.paused} : null;
@@ -274,7 +274,7 @@ function render(next) {
   $("blindInfo").textContent = `无限注德州 · 盲注 ${num(next.settings.sb)} / ${num(next.settings.bb)}`;
   $("handInfo").textContent = `${next.hand_number ? `第 ${next.hand_number} 手 · ${next.street}` : `${next.settings.max_players} 人私人桌`}`;
   $("playerCount").textContent = `${next.players.length} / ${next.settings.max_players}`;
-  $("potLabel").innerHTML = next.phase === "playing" ? `底池 <b>${num(next.pot)}</b>` : next.phase === "finished" ? "本 手 结 算" : "等待朋友入座";
+  $("potLabel").innerHTML = next.phase === "playing" ? `底池 <b>${num(next.pot)}</b>` : next.phase === "finished" ? "本 手 结 算" : "等待玩家入席";
   $("myName").textContent = me.name;
   $("myStack").textContent = num(me.stack);
   $("myBuyin").textContent = num(me.buyin);
@@ -301,7 +301,7 @@ function render(next) {
 function updateClock() {
   if (!snapshot) return;
   const actor = snapshot.players.find(p=>p.seat===snapshot.actor_seat);
-  let text = snapshot.session_ended ? "本场已结束 · 总结已保存" : snapshot.paused ? "牌局暂停" : snapshot.phase === "playing" ? `${actor?.name || "玩家"} 行动中` : snapshot.phase === "finished" ? "下一手，夜局继续" : "朋友入座后由房主开局";
+  let text = snapshot.session_ended ? "本场已结束 · 总结已保存" : snapshot.paused ? "牌局暂停" : snapshot.phase === "playing" ? `${actor?.name || "玩家"} 行动中` : snapshot.phase === "finished" ? "等待下一手" : "等待房主开局";
   $("turnNote").textContent = text;
   updateCountdown();
   if ($("summaryDialog").open && sessionReport) updateSessionDuration();
@@ -603,10 +603,10 @@ function setupWelcome() {
   if (code) {
     hide("sizeField",true);
     hide("timerField",true);
-    $("entryEyebrow").textContent = "YOU'RE INVITED";
-    $("entryTitle").textContent = "朋友给你留了位。";
-    $("entryDescription").textContent = invite ? "输入昵称，加入这张私人牌桌。" : "需要完整邀请链接才能加入。请向房主索取链接。";
-    $("entrySubmit").textContent = "加入朋友的牌桌 ↗";
+    $("entryEyebrow").textContent = "INVITATION";
+    $("entryTitle").textContent = "加入牌桌";
+    $("entryDescription").textContent = invite ? "输入昵称后入席。" : "请使用房主提供的完整邀请链接。";
+    $("entrySubmit").textContent = "加入牌桌 ↗";
     $("entrySubmit").disabled = !invite;
   }
   $("savedRooms").innerHTML = Object.entries(storage).filter(([key])=>key!==code).map(([key,value])=>`<a href="/rooms/${encodeURIComponent(key)}">回到 ${esc(value.name)} 的座位 · ${esc(key)} →</a>`).join("");
@@ -625,7 +625,7 @@ $("entryForm").addEventListener("submit",async event=>{
   finally { busy=false; $("entrySubmit").disabled=false; updateEnabled(); }
 });
 $("inviteBtn").addEventListener("click",async()=>{
-  try { await navigator.clipboard.writeText(invitationURL()); toast("邀请链接已复制，发给朋友即可入座。"); }
+  try { await navigator.clipboard.writeText(invitationURL()); toast("邀请链接已复制。"); }
   catch (_) { $("inviteLink").value=invitationURL(); $("inviteDialog").showModal(); $("inviteLink").select(); }
 });
 $("closeInvite").addEventListener("click",()=>$("inviteDialog").close());
