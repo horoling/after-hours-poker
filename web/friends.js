@@ -113,7 +113,7 @@ function renderLog() {
   const html = snapshot.actions.map(a => {
     const street = a.street !== previousStreet ? `<div class="log-street">${labels[a.street]}</div>` : "";
     previousStreet = a.street;
-    return `${street}<div class="log-row"><b>${esc(players.get(a.seat) || `座位 ${a.seat+1}`)}</b><span>${esc(a.label)}${a.agent ? " · Agent" : a.automatic ? " · 超时" : ""}</span></div>`;
+    return `${street}<div class="log-row"><b>${esc(players.get(a.seat) || `座位 ${a.seat+1}`)}</b><span class="${a.kind === "raise" ? "log-raise" : ""}">${esc(a.label)}${a.agent ? " · Agent" : a.automatic ? " · 超时" : ""}</span></div>`;
   }).join("");
   $("actionLog").innerHTML = html || (snapshot.phase === "lobby" ? "分享邀请链接，或添加 Agent。由房主开局。" : "已发底牌，等待行动。");
   $("actionLog").scrollTop = $("actionLog").scrollHeight;
@@ -136,9 +136,12 @@ function renderActions() {
       allInCall = false;
       $("raiseAmount").value = selectedRaise ?? "";
     }
-    $("halfPotAmount").textContent = legal.can_raise ? `至 ${num(legal.half_pot_to)}` : "当前不可加注";
-    $("potAmount").textContent = legal.can_raise ? `至 ${num(legal.pot_to)}` : "当前不可加注";
-    $("allinAmount").textContent = legal.all_in ? legal.all_in.kind === "call" ? `跟注 ${num(legal.call)}` : `至 ${num(legal.all_in.amount)}` : "当前不可全下";
+    $("halfPotAmount").textContent = legal.can_raise ? num(legal.half_pot_to) : "—";
+    $("potAmount").textContent = legal.can_raise ? num(legal.pot_to) : "—";
+    $("halfPotBtn").setAttribute("aria-label",legal.can_raise ? `半底池，加注至 ${num(legal.half_pot_to)}，直接下注` : "半底池，当前不可加注");
+    $("potBtn").setAttribute("aria-label",legal.can_raise ? `满底池，加注至 ${num(legal.pot_to)}，直接下注` : "满底池，当前不可加注");
+    $("allinKind").textContent = legal.all_in?.kind === "call" ? "跟注" : "加注至";
+    $("allinAmount").textContent = legal.all_in ? num(legal.all_in.kind === "call" ? legal.call : legal.all_in.amount) : "—";
     renderSizing();
   }
   let message = "";
@@ -190,30 +193,30 @@ function renderSizing(forceAmount = false) {
     slider.setAttribute("aria-valuetext", `本轮加注至 ${num(selectedRaise)}`);
     if (forceAmount || document.activeElement !== input) input.value = selectedRaise;
     $("selectedRaise").textContent = num(selectedRaise);
+    $("raisePayment").textContent = `本次投入 ${num(selectedRaise - myPlayer().bet)} · 已下注 ${num(myPlayer().bet)}`;
     $("raiseMinimum").textContent = `最小 ${num(legal.min_raise)}`;
     $("raiseMaximum").textContent = `全下 ${num(legal.max_raise)}`;
     $("raiseLabel").textContent = selectedRaise === legal.max_raise ? `确认全下至 ${num(selectedRaise)}` : `加注至 ${num(selectedRaise)}`;
     $("raiseBtn").classList.toggle("all-in-confirm", selectedRaise === legal.max_raise);
-    $("raiseHelp").textContent = "金额包含本轮已投入筹码。按钮和滑杆只选金额，确认后下注；½ 底池按跟注后的底池计算，筹码取整并遵守最小加注。";
+    $("raiseHelp").textContent = "半池／满池点击即下注。自定义金额与 All-in 需确认。加注至为本轮总投入；底池比例按跟注后的底池计算。";
   } else {
     $("raiseLabel").textContent = `确认全下跟注 ${num(legal.call)}`;
     $("raiseBtn").classList.toggle("all-in-confirm", allInCall);
     $("raiseHelp").textContent = legal.all_in ? "筹码不足完整跟注时，可全下跟注。" : "当前未开放加注权，可跟注或弃牌。";
   }
-  for (const [id, preset] of [["halfPotBtn","half"],["potBtn","pot"],["allinBtn","allin"]]) {
-    $(id).setAttribute("aria-pressed", String(selectedPreset === preset));
-  }
+  $("allinBtn").setAttribute("aria-pressed", String(selectedPreset === "allin"));
 }
 
 function selectPreset(preset) {
   const legal = snapshot?.legal;
   if (!legal || busy || !connectionOK || countdownState().expired) return;
+  if (preset === "half" || preset === "pot") {
+    if (!legal.can_raise) return;
+    return send("act",{kind:"raise",amount:preset === "half" ? legal.half_pot_to : legal.pot_to});
+  }
   if (preset === "allin" && legal.all_in) {
     allInCall = legal.all_in.kind === "call";
     selectedRaise = allInCall ? null : legal.all_in.amount;
-  } else if (legal.can_raise && (preset === "half" || preset === "pot")) {
-    allInCall = false;
-    selectedRaise = preset === "half" ? legal.half_pot_to : legal.pot_to;
   } else return;
   selectedPreset = preset;
   renderSizing(true);

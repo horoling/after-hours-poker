@@ -37,7 +37,7 @@
         <button class="primary full" id="entrySubmit" type="submit">创建牌桌 <span>↗</span></button>
       </form>
       <div id="savedRooms" class="saved-rooms"></div>
-      <div class="entry-note"><span>♧</span><p>小盲 1 / 大盲 2，无前注，买入 1,000 筹码。<br>默认每次行动 30 秒，可调整或关闭。<br>超时自动过牌，需要跟注时自动弃牌。</p></div>
+      <div class="entry-note"><span>♧</span><p>小盲 1 / 大盲 2，无前注。<br>初始筹码 100，每次补码 100。<br>默认行动时限 30 秒；超时自动过牌或弃牌。</p></div>
       <p class="fine-print">虚拟筹码 · 仅供娱乐</p>
     </section>
   </main>
@@ -60,21 +60,21 @@
           <div id="myTurnTimer" class="my-turn-timer hidden"><span id="myTimerLabel">你的行动倒计时</span><b id="myTimerValue">00:30</b><div class="countdown-track"><i></i></div></div>
           <div id="betActions" class="hidden">
             <div class="action-buttons"><button id="foldBtn" class="fold">弃牌 <kbd>F</kbd></button><button id="callBtn" class="primary"><span id="callLabel">过牌</span> <kbd>C</kbd></button></div>
-            <div class="bet-presets" aria-label="快捷选择下注金额">
-              <button id="halfPotBtn" class="secondary" type="button" aria-pressed="false">½ 底池 <kbd>1</kbd><small id="halfPotAmount"></small></button>
-              <button id="potBtn" class="secondary" type="button" aria-pressed="false">1 底池 <kbd>2</kbd><small id="potAmount"></small></button>
-              <button id="allinBtn" class="secondary all-in-preset" type="button" aria-pressed="false">All-in <kbd>A</kbd><small id="allinAmount"></small></button>
+            <div class="bet-presets" aria-label="半池与满池点击直接下注">
+              <button id="halfPotBtn" class="secondary" type="button">½ 底池 <kbd>1</kbd><span class="preset-amount"><span>加注至</span><strong id="halfPotAmount"></strong></span></button>
+              <button id="potBtn" class="secondary" type="button">1 底池 <kbd>2</kbd><span class="preset-amount"><span>加注至</span><strong id="potAmount"></strong></span></button>
+              <button id="allinBtn" class="secondary all-in-preset" type="button" aria-pressed="false">All-in <kbd>A</kbd><span class="preset-amount"><span id="allinKind">加注至</span><strong id="allinAmount"></strong></span></button>
             </div>
             <form id="raiseForm" class="bet-sizing-form">
               <div id="raiseSizing">
-                <div class="sizing-heading"><label for="raiseSlider">自定义 · 本轮加注至</label><output id="selectedRaise" for="raiseSlider raiseAmount"></output></div>
+                <div class="sizing-heading"><div><label for="raiseSlider">本轮加注至</label><small id="raisePayment"></small></div><output id="selectedRaise" for="raiseSlider raiseAmount"></output></div>
                 <input id="raiseSlider" class="raise-slider" type="range" step="1" aria-label="滑动选择本轮加注总额">
                 <div class="slider-endpoints"><span id="raiseMinimum"></span><span id="raiseMaximum"></span></div>
               </div>
               <div class="raise-confirm-row"><div id="amountField"><label for="raiseAmount">精确金额</label><input id="raiseAmount" type="number" inputmode="numeric" step="1" required></div><button class="primary" id="raiseBtn" type="submit"><span id="raiseLabel">确认加注</span> <kbd>R</kbd></button></div>
             </form>
             <div class="raise-help" id="raiseHelp"></div>
-            <div class="shortcut-hint">电脑快捷键：F 弃牌 · C 过牌／跟注 · 1 半池 · 2 满池 · A 全下 · R 确认加注</div>
+            <div class="shortcut-hint">电脑快捷键：F 弃牌 · C 过牌／跟注 · 1 半池下注 · 2 满池下注 · A 选择全下 · R 确认自定义／全下</div>
           </div>
           <button id="startBtn" class="primary full hidden">开始第一手</button>
         </section>

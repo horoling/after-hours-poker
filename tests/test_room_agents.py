@@ -25,6 +25,8 @@ class RoomAgentTests(unittest.TestCase):
         result = self.client.post("/api/rooms", json=dict(name="房主", turn_seconds=0)).get_json()
         self.code, self.invite = result["room"]["code"], result["room"]["invite"]
         self.tokens = [result["token"]]
+        # Keep deeper-stack strategy fixtures explicit; default buy-ins are tested separately.
+        self.req("settings", sb=1, bb=2, starting_stack=1000, turn_seconds=0)
 
     def req(self, command=None, player=0, client=None, **data):
         client = client or self.client
@@ -249,7 +251,7 @@ class RoomAgentTests(unittest.TestCase):
                     self.assertLess(count, 150)
                 report = self.req("summary").get_json()
                 self.assertEqual(report["completed_hands"], 1)
-                self.assertEqual(sum(p["stack"] for p in state["players"]), capacity * 1000)
+                self.assertEqual(sum(p["stack"] for p in state["players"]), capacity * 100)
                 self.assertEqual(report["net_total"], 0)
                 self.assertTrue(all(p["hands_played"] == 1 for p in report["players"]))
                 self.assertTrue(any(a["agent"] for a in state["actions"]))
@@ -329,6 +331,22 @@ class RoomAgentTests(unittest.TestCase):
         report = self.req("summary", player=1).get_json()
         self.assertEqual(len([p for p in report["players"] if not p["is_agent"]]), 2)
         self.assertEqual(report["net_total"], 0)
+
+    def test_default_human_and_agent_buyins_and_topups_are_100(self):
+        result = self.client.post("/api/rooms", json=dict(name="默认买入")).get_json()
+        self.code, self.invite = result["room"]["code"], result["room"]["invite"]
+        self.tokens = [result["token"]]
+        self.join()
+        state = self.add()
+        self.assertEqual(state["settings"]["starting_stack"], 100)
+        self.assertTrue(all((p["stack"], p["buyin"]) == (100, 100) for p in state["players"]))
+        agent = next(p for p in state["players"] if p["is_agent"])
+        state = self.req("rebuy").get_json()
+        state = self.req("rebuy_agent", agent_id=agent["id"], version=state["version"]).get_json()
+        self.assertEqual([(p["stack"],p["buyin"]) for p in state["players"]], [(200,200),(100,100),(200,200)])
+        report = self.req("summary").get_json()
+        self.assertEqual(report["total_buyin"],500)
+        self.assertEqual(report["net_total"],0)
 
 
 if __name__ == "__main__":

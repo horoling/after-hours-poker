@@ -30,6 +30,7 @@ MAX_PLAYERS = 11
 CHAT_LIMIT = 200
 CHAT_MESSAGE_LENGTH = 300
 AGENT_THINK_SECONDS = 1.2
+DEFAULT_BUYIN = 100
 
 
 def hand_positions(hand):
@@ -381,10 +382,10 @@ def create_room():
     data = body()
     capacity = integer(data.get("max_players", 6), "座位数", 2, MAX_PLAYERS)
     turn_seconds = integer(data.get("turn_seconds", 30), "行动时间", 0, 600)
-    player, token = new_player(data.get("name"), 0, 1000)
+    player, token = new_player(data.get("name"), 0, DEFAULT_BUYIN)
     code = secrets.token_hex(5).upper()
     room = dict(code=code, invite=secrets.token_urlsafe(24), owner=player["id"],
-                players=[player], settings=dict(sb=1, bb=2, starting_stack=1000, turn_seconds=turn_seconds,
+                players=[player], settings=dict(sb=1, bb=2, starting_stack=DEFAULT_BUYIN, turn_seconds=turn_seconds,
                                                 max_players=capacity),
                 version=1, hand=None, dealer=-1, paused=False, history=[],
                 chat=[], chat_version=0)
