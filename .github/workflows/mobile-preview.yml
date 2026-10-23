@@ -33,6 +33,7 @@ jobs:
           python -m pip install -r requirements-multiplayer.txt
           python -m unittest discover -s tests -v
           node --check web/friends.js
+          node --test tests/test_results.js
       - name: Install verified Cloudflare client
         run: |
           curl --fail --location --retry 3 --output "$RUNNER_TEMP/cloudflared" https://github.com/cloudflare/cloudflared/releases/download/2026.10.2/cloudflared-linux-amd64

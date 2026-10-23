@@ -5,7 +5,7 @@ No client receives the deck or another player's hidden cards.
 """
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from contextlib import contextmanager
 import hashlib
 import json
@@ -17,8 +17,8 @@ import sqlite3
 import time
 
 from flask import Blueprint, Response, current_app, jsonify, request
-from pokerkit import Automation, Card, Deck, NoLimitTexasHoldem
-from session_stats import csv_text, ensure_session, record_settlement, session_summary, sync_players
+from pokerkit import Automation, Card, ChipsPushing, Deck, NoLimitTexasHoldem, StandardHighHand
+from session_stats import csv_text, ensure_session, hand_totals, record_settlement, session_summary, sync_players
 from room_agents import choose_action
 
 rooms = Blueprint("private_rooms", __name__)
@@ -237,12 +237,75 @@ def finish_if_needed(room, state):
     for i, seat in enumerate(hand["seats"]):
         by_seat[seat]["stack"] = state.stacks[i]
     record_settlement(room, state)
+    hand["result"] = hand_result(room, state)
     room["history"].append(dict(
         number=hand["number"], board=[repr(c) for c in state.get_board_cards(0)],
-        results=[dict(name=by_seat[seat]["name"], delta=state.payoffs[i])
-                 for i, seat in enumerate(hand["seats"])],
+        results=[dict(name=p["name"], delta=p["delta"], won=p["won"], hand_rank=p["hand_rank"])
+                 for p in hand["result"]["players"]],
     ))
     room["history"] = room["history"][-50:]
+
+
+def best_hand(hole, board):
+    """Display the same strongest five-card hand used by PokerKit's high lookup."""
+    hand = StandardHighHand.from_game("".join(hole), "".join(board))
+    cards = [repr(c) for c in hand.cards]
+    counts = Counter(c[0] for c in cards)
+    order = "23456789TJQKA"
+    groups = sorted(counts, key=lambda rank: (counts[rank], order.index(rank)), reverse=True)
+    kind = hand.entry.label.name
+    category = dict(HIGH_CARD="高牌", ONE_PAIR="一对", TWO_PAIR="两对", THREE_OF_A_KIND="三条",
+                    STRAIGHT="顺子", FLUSH="同花", FULL_HOUSE="葫芦", FOUR_OF_A_KIND="四条",
+                    STRAIGHT_FLUSH="同花顺")[kind]
+    wheel = kind in ("STRAIGHT", "STRAIGHT_FLUSH") and set(counts) == set("A2345")
+    high = "5" if wheel else max(counts, key=order.index)
+    rank_text = lambda rank: "10" if rank == "T" else rank
+    if kind == "STRAIGHT_FLUSH" and set(counts) == set("TJQKA"):
+        category, detail = "皇家同花顺", ""
+    elif kind == "FULL_HOUSE":
+        detail = f"{rank_text(groups[0])} 满 {rank_text(groups[1])}"
+    elif kind == "TWO_PAIR":
+        detail = " / ".join(rank_text(r) for r in groups[:2])
+    elif kind in ("ONE_PAIR", "THREE_OF_A_KIND", "FOUR_OF_A_KIND"):
+        detail = rank_text(groups[0])
+    else:
+        detail = f"{rank_text(high)} 高"
+    cards.sort(key=lambda c: (counts[c[0]] if kind in ("ONE_PAIR", "TWO_PAIR", "THREE_OF_A_KIND", "FULL_HOUSE", "FOUR_OF_A_KIND") else 1,
+                              -1 if wheel and c[0] == "A" else order.index(c[0])), reverse=True)
+    return dict(category=category, label=category + (f" · {detail}" if detail else ""), cards=cards)
+
+
+def hand_result(room, state):
+    """Public settlement only. Mucked losers still reveal if they never folded.
+
+    Engine statuses become false when losing cards are automatically mucked;
+    recorded folding actions, rather than final statuses, determine eligibility.
+    """
+    hand = room["hand"]
+    folded = {a["seat"] for a in hand["actions"] if a["kind"] == "fold"}
+    board = [repr(c) for c in state.get_board_cards(0)]
+    showdown = len(board) == 5 and len(hand["seats"]) - len(folded) >= 2
+    awards = [0] * len(hand["seats"])
+    pots = []
+    for operation in state.operations:
+        if isinstance(operation, ChipsPushing):
+            winners = []
+            for i, amount in enumerate(operation.amounts):
+                if amount > 0:
+                    awards[i] += amount
+                    winners.append(dict(id=hand["player_ids"][str(hand["seats"][i])], amount=amount))
+            if winners:
+                pots.append(dict(number=operation.pot_index + 1, amount=sum(operation.amounts), winners=winners))
+    players = []
+    for i, seat in enumerate(hand["seats"]):
+        pid = hand["player_ids"][str(seat)]
+        record = room["session"]["participants"][pid]
+        cards = list(hand["holes"][str(seat)]) if showdown and seat not in folded else []
+        players.append(dict(id=pid, seat=seat, name=record["name"], delta=state.payoffs[i],
+                            won=awards[i] > 0, awarded=awards[i], folded=seat in folded,
+                            cards=cards, hand_rank=best_hand(cards, board) if cards else None))
+    return dict(hand_number=hand["number"], showdown=showdown, pot=hand_totals(state)[0],
+                split=any(len(p["winners"]) > 1 for p in pots), pots=pots, players=players)
 
 
 def set_deadline(room):
@@ -313,26 +376,33 @@ def view(room, player, state=None):
         state = build_state(hand)
     seat_to_index = {seat: i for i, seat in enumerate(hand["seats"])} if hand else {}
     positions = hand_positions(hand)
+    result = (hand.get("result") or hand_result(room, state)) if hand and not state.status else None
+    results = {p["id"]: p for p in result["players"]} if result else {}
     seats = []
     for p in sorted(room["players"], key=lambda x: x["seat"]):
         item = {k: p[k] for k in ("id", "name", "seat", "stack", "buyin")}
         item.update(is_agent=bool(p.get("is_agent")), online=bool(p.get("is_agent")) or time.time() - p["seen"] < 20, cards=[], bet=0,
-                    status="等待入局", delta=None, position=None)
+                    status="等待入局", delta=None, position=None, hand_rank=None, won=False, awarded=0)
         i = seat_to_index.get(p["seat"])
         if hand and hand["player_ids"].get(str(p["seat"])) != p["id"]:
             i = None
         if i is not None:
             item["position"] = positions[p["seat"]]
-            # Own cards are retained even after folding; other cards only become
-            # public if PokerKit explicitly showed them at showdown.
+            # Reveal every non-folded showdown hand, including engine-mucked losers.
+            # Folded hands stay private; own cards remain recoverable after mucking.
             own = p["id"] == player["id"]
-            shown = bool(state.hole_cards[i]) and all(state.hole_card_statuses[i])
-            item["cards"] = [repr(c) for c in state.hole_cards[i]] if own or shown else []
+            settlement = results.get(p["id"])
+            item["cards"] = list(settlement["cards"]) if settlement else []
+            if own and not item["cards"]:
+                item["cards"] = [repr(c) for c in state.hole_cards[i]]
             if own and not item["cards"]:
                 item["cards"] = hand["holes"][str(p["seat"])]
+            if settlement:
+                item.update(hand_rank=settlement["hand_rank"], won=settlement["won"], awarded=settlement["awarded"])
             item["bet"] = state.bets[i]
             item["stack"] = state.stacks[i] if state.status else p["stack"]
-            item["status"] = ("已结算" if not state.status else "已弃牌" if not state.statuses[i]
+            folded = any(a["kind"] == "fold" and a["seat"] == p["seat"] for a in hand["actions"])
+            item["status"] = ("已弃牌" if folded else "已结算" if not state.status else "已弃牌" if not state.statuses[i]
                               else "全下" if state.stacks[i] == 0 else "对局中")
             item["delta"] = state.payoffs[i] if not state.status else None
         seats.append(item)
@@ -359,7 +429,7 @@ def view(room, player, state=None):
                 street=STREETS[state.street_index] if state and state.street_index is not None else "等待开局" if not state else "本手结束",
                 deadline=hand["deadline"] if hand else None,
                 server_time=now, legal=legal, turn_timer=timer,
-                actions=hand["actions"] if hand else [], history=room["history"],
+                actions=hand["actions"] if hand else [], history=room["history"], result=result,
                 session_ended=room["session"]["ended_at"] is not None,
                 chat_version=room["chat_version"])
 
@@ -372,7 +442,7 @@ def room_page(code=None):
 
 @rooms.get("/friends-assets/<filename>")
 def room_asset(filename):
-    if filename not in ("friends.css", "friends.js"):
+    if filename not in ("friends.css", "friends.js", "results.js"):
         raise RoomError("文件不存在。", 404)
     return current_app.send_static_file(filename)
 

@@ -8,6 +8,7 @@
   <title>After Hours · 夜局</title>
   <meta name="description" content="After Hours · 夜局。邀请制德州牌桌，支持 2–11 人、Agent 玩家、房间聊天与整场统计。">
   <link rel="stylesheet" href="/friends-assets/friends.css">
+  <script defer src="/friends-assets/results.js"></script>
   <script defer src="/friends-assets/friends.js"></script>
 </head>
 <body>
@@ -52,9 +53,15 @@
         <span id="timerAnnouncement" class="sr-only" role="status"></span>
         <div class="table" id="table">
           <div class="felt-ring"></div><div class="table-watermark">夜 局<span>AFTER HOURS</span></div>
-          <div class="community"><div class="pot-label" id="potLabel">等待玩家入席</div><div class="board" id="board"></div><div class="turn-note" id="turnNote" role="status"></div></div>
+          <div class="community"><div class="pot-label" id="potLabel">等待玩家入席</div><div class="board" id="board"></div><div id="tableWinner" class="table-winner hidden" aria-hidden="true"></div><div class="turn-note" id="turnNote" role="status"></div></div>
           <div id="seats"></div>
         </div>
+        <section id="handResult" class="hand-result hidden" aria-labelledby="handResultTitle">
+          <div class="result-heading"><div><div id="resultHeadline" class="result-headline"></div><h2 id="handResultTitle" role="status"></h2></div><div id="resultNet" class="result-net"></div></div>
+          <div id="resultPots" class="result-pots"></div>
+          <details id="showdownDetails" open><summary>摊牌明细 · 底牌与最佳五张 <span>⌄</span></summary><div id="showdownPlayers" class="showdown-players"></div></details>
+          <p id="resultHint" class="micro"></p>
+        </section>
         <section class="action-panel" id="actionPanel" aria-label="牌局操作">
           <div class="action-panel-heading"><div id="tableMessage" class="table-message"></div><button id="actionChatBtn" class="text-button">聊天 <span class="chat-unread hidden" aria-hidden="true"></span></button></div>
           <div id="myTurnTimer" class="my-turn-timer hidden"><span id="myTimerLabel">你的行动倒计时</span><b id="myTimerValue">00:30</b><div class="countdown-track"><i></i></div></div>
@@ -88,7 +95,7 @@
         </section>
         <section class="side-card" id="agentPanel"><div class="section-head"><h2>Agent 陪打</h2><span>GTO-lite</span></div><p class="micro">仅使用自己的底牌与公开信息决策。Agent 身份对全桌可见。</p><div id="agentList" class="agent-list"></div><form id="agentForm" class="agent-form"><label for="agentCount">添加数量</label><div class="agent-add-row"><select id="agentCount" aria-label="添加 Agent 数量"></select><button id="addAgentBtn" class="secondary" type="submit">添加 Agent</button></div></form><p id="agentHint" class="micro" role="status"></p></section>
         <section class="side-card"><div class="section-head"><h2>牌局记录</h2><span>最近 50 手</span></div><div id="history" class="history"></div></section>
-        <section class="side-card table-rules"><details><summary>本桌采用的规则 <span>⌄</span></summary><p>52 张牌，每人 2 张底牌，从底牌和公共牌的 7 张中选最强 5 张。单次发牌，不抽水、不收前注。</p><p>加注输入本轮总额；最小加注增量等于本轮上一次完整下注或加注增量。未达到完整加注的全下，不一定重新开放加注权。</p><p>不足跟注时可全下；按实际投入分别结算主池、边池，退回无人跟注的部分。平分后的零头从庄家左侧有资格的赢家开始分配。</p><p>正常轮转采用移动庄家：每手移到下一位有筹码的玩家。两人时庄家下小盲，翻牌前先行动，翻牌后后行动。新加入者下一手入局，补码在两手之间进行。</p><p>摊牌自动亮出结算需要的底牌；弃牌不公开。默认行动时限为 30 秒，可由房主调整或关闭；超时自动过牌或弃牌。</p></details></section>
+        <section class="side-card table-rules"><details><summary>本桌采用的规则 <span>⌄</span></summary><p>52 张牌，每人 2 张底牌，从底牌和公共牌的 7 张中选最强 5 张。单次发牌，不抽水、不收前注。</p><p>加注输入本轮总额；最小加注增量等于本轮上一次完整下注或加注增量。未达到完整加注的全下，不一定重新开放加注权。</p><p>不足跟注时可全下；按实际投入分别结算主池、边池，退回无人跟注的部分。平分后的零头从庄家左侧有资格的赢家开始分配。</p><p>正常轮转采用移动庄家：每手移到下一位有筹码的玩家。两人时庄家下小盲，翻牌前先行动，翻牌后后行动。新加入者下一手入局，补码在两手之间进行。</p><p>摊牌结算后，所有未弃牌者亮牌并显示最佳五张；弃牌不公开。默认行动时限为 30 秒，可由房主调整或关闭；超时自动过牌或弃牌。</p></details></section>
       </aside>
     </div>
   </main>
@@ -117,6 +124,7 @@
   </dialog>
   <dialog id="endDialog" aria-labelledby="endTitle"><h2 id="endTitle">结束本场？</h2><p class="muted">所有已结算手牌会汇总为最终账单。结束后不能继续开牌、补码或修改账目；下一场请新建房间。</p><div class="dialog-actions"><button id="cancelEnd" class="secondary">返回牌桌</button><button id="confirmEnd" class="primary">结束并生成总结</button></div></dialog>
   <div id="toast" class="toast hidden" role="alert"></div>
+  <div id="chipEffects" class="chip-effects" aria-hidden="true"></div>
   <dialog id="nameDialog"><form id="renameForm"><h2>修改昵称</h2><label for="newName">新昵称</label><input id="newName" maxlength="16" required><div class="dialog-actions"><button type="button" class="secondary" id="cancelRename">取消</button><button type="submit" class="primary">保存</button></div></form></dialog>
   <dialog id="inviteDialog"><h2>邀请入席</h2><p class="muted">分享完整邀请链接，其他玩家即可入席。</p><label for="inviteLink">私人邀请链接</label><input id="inviteLink" readonly><div class="dialog-actions"><button class="primary" id="closeInvite">完成</button></div></dialog>
 </body>

@@ -14,6 +14,8 @@ let snapshot = null, busy = false, polling = false, pollTimer, toastTimer;
 let sizingTurn = "", selectedRaise = null, selectedPreset = "", allInCall = false;
 let serverOffset = 0, savedSettings = "", connectionOK = true;
 let timerAnchor=null, countdownNoticeKey="", timeoutSyncKey="";
+let resultSignature="";
+const visualCounters=new Map(), visualAnimations=new Set(), visualTimers=new Set();
 let sessionReport = null, reportBusy = false, chartSelection = null;
 let chatMessages = [], chatCursor = 0, chatTarget = 0, lastReadChat = null;
 let chatReady = false, chatLoading = false, chatSending = false, chatEpoch = 0, pendingChat = null;
@@ -98,11 +100,12 @@ function renderSeats() {
     const mine = p.id === snapshot.me, turn = snapshot.phase === "playing" && snapshot.actor_seat === seat;
     const delta = p.delta === null ? "" : ` · ${signed(p.delta)}`;
     const status = p.status === "等待入局" ? "下手入局" : p.status;
-    return `<div class="seat${mine ? " mine" : ""}${turn ? " turn" : ""}${p.status === "已弃牌" ? " folded" : ""}" style="left:${x}%;top:${y}%">
+    return `<div data-player-id="${esc(p.id)}" class="seat${mine ? " mine" : ""}${turn ? " turn" : ""}${p.won ? " won" : ""}${p.status === "已弃牌" ? " folded" : ""}" style="left:${x}%;top:${y}%">
       ${p.bet ? `<span class="seat-bet">● ${num(p.bet)}</span>` : ""}
       ${snapshot.dealer === seat && snapshot.hand_number ? '<span class="dealer" title="庄家">D</span>' : ""}
       <div class="seat-info">${p.position ? `<div class="seat-position" title="${esc(POSITION_NAMES[p.position] || p.position)}">${esc(p.position)}</div>` : ""}<div class="seat-name"><i class="seat-online${p.online ? "" : " away"}"></i>${esc(p.name)}${mine ? ' <span class="you">你</span>' : ""}${p.id === snapshot.owner ? " ♛" : ""}</div>${p.is_agent ? '<div class="seat-agent">AGENT</div>' : ""}<div class="seat-stack">${num(p.stack)}</div><div class="seat-status">${esc(snapshot.phase === "lobby" ? "已入座" : lastActions.get(seat) || status)}${esc(delta)}</div>${turn && snapshot.turn_timer?.enabled ? '<div id="seatClock" class="seat-clock"><span id="seatTimerValue"></span><div class="countdown-track"><i></i></div></div>' : ""}</div>
       <div class="seat-cards">${snapshot.phase === "lobby" || p.status === "等待入局" ? "" : p.cards.length ? p.cards.map(c => card(c)).join("") : card(null,true)+card(null,true)}</div>
+      ${p.hand_rank ? `<div class="seat-hand-rank" title="${esc(p.hand_rank.label)}">${esc(p.hand_rank.label)}</div>` : ""}
     </div>`;
   }).join("");
 }
@@ -117,7 +120,101 @@ function renderLog() {
   }).join("");
   $("actionLog").innerHTML = html || (snapshot.phase === "lobby" ? "分享邀请链接，或添加 Agent。由房主开局。" : "已发底牌，等待行动。");
   $("actionLog").scrollTop = $("actionLog").scrollHeight;
-  $("history").innerHTML = snapshot.history.slice().reverse().map(h => `<details><summary>第 ${h.number} 手<span>查看结果</span></summary><p>${esc(h.board.map(c=>c.slice(0,-1).replace("T","10")+SUITS[c.slice(-1)]).join(" ")) || "未发公共牌"}</p>${h.results.map(p=>`<div class="result-row"><span>${esc(p.name)}</span><b class="${p.delta > 0 ? "positive" : p.delta < 0 ? "negative" : ""}">${signed(p.delta)}</b></div>`).join("")}</details>`).join("") || "完整打完一手后，结果会留在这里。";
+  $("history").innerHTML = snapshot.history.slice().reverse().map(h => `<details><summary>第 ${h.number} 手<span>查看结果</span></summary><p>${esc(h.board.map(c=>c.slice(0,-1).replace("T","10")+SUITS[c.slice(-1)]).join(" ")) || "未发公共牌"}</p>${h.results.map(p=>`<div class="result-row"><span>${esc(p.name)}${p.won ? " · 获池" : ""}${p.hand_rank ? `<small class="history-hand-rank">${esc(p.hand_rank.label)}</small>` : ""}</span><b class="${p.delta > 0 ? "positive" : p.delta < 0 ? "negative" : ""}">${signed(p.delta)}</b></div>`).join("")}</details>`).join("") || "完整打完一手后，结果会留在这里。";
+}
+
+function renderResult() {
+  const result=snapshot.result, signature=JSON.stringify([snapshot.code,snapshot.me,result]);
+  hide("handResult",!result); hide("tableWinner",!result);
+  if(signature===resultSignature)return;
+  resultSignature=signature;
+  if(!result) {$("tableWinner").textContent="";return;}
+  const info=PokerResults.describe(result,snapshot.me);
+  $("resultHeadline").textContent=info.headline;
+  $("handResultTitle").textContent=info.title;
+  $("handResult").classList.toggle("my-win",info.won);
+  $("resultNet").innerHTML=info.net==null ? "" : `<small>本手净盈亏</small><b class="${info.net>0 ? "positive" : info.net<0 ? "negative" : ""}">${signed(info.net)}</b>`;
+  const names=new Map(result.players.map(p=>[p.id,p.name]));
+  $("resultPots").innerHTML=result.pots.map(p=>`<div><span>${result.pots.length>1 ? p.number===1 ? "主池" : `边池 ${p.number-1}` : "底池"} <b>${num(p.amount)}</b></span><span>${p.winners.map(w=>`${esc(names.get(w.id))} <b>${num(w.amount)}</b>`).join(" · ")}</span></div>`).join("");
+  hide("showdownDetails",!result.showdown);
+  const revealed=result.players.filter(p=>p.hand_rank).sort((a,b)=>Number(b.won)-Number(a.won) || Number(b.id===snapshot.me)-Number(a.id===snapshot.me));
+  $("showdownPlayers").innerHTML=revealed.map(p=>`<article class="showdown-player${p.won ? " winner" : ""}"><div class="showdown-player-heading"><b>${esc(p.name)}${p.id===snapshot.me ? " · 你" : ""}</b><span>${p.won ? `获池 ${num(p.awarded)}` : ""}</span></div><div class="showdown-hole">${p.cards.map(c=>card(c)).join("")}</div><strong class="showdown-rank">${esc(p.hand_rank.label)}</strong><div class="showdown-best">${p.hand_rank.cards.map(c=>card(c)).join("")}</div><small>最佳五张 · 本手 ${signed(p.delta)}</small></article>`).join("");
+  $("resultHint").textContent=result.showdown ? "未弃牌者自动亮牌；下方展示从底牌与公共牌中选出的最佳五张。获池金额含投入本金，本手净盈亏已扣除投入。" : "其余玩家弃牌，底牌未公开。获池金额含投入本金。";
+  const winners=result.players.filter(p=>p.won);
+  $("tableWinner").innerHTML=`<b>${esc(info.headline)}</b><span>${esc(winners.slice(0,2).map(p=>p.name).join(" · "))}${winners.length>2 ? ` 等 ${winners.length} 人` : ""}</span>`;
+}
+
+function effectTimer(callback,delay) {
+  const timer=setTimeout(()=>{visualTimers.delete(timer);callback();},delay);
+  visualTimers.add(timer);return timer;
+}
+function resetVisualEffects() {
+  for(const frame of visualCounters.values())cancelAnimationFrame(frame);
+  visualCounters.clear();
+  for(const animation of visualAnimations)animation.cancel();
+  visualAnimations.clear();
+  for(const timer of visualTimers)clearTimeout(timer);
+  visualTimers.clear();
+  $("chipEffects").replaceChildren();
+  document.querySelectorAll(".chip-gain").forEach(el=>el.remove());
+  $("tableWinner").classList.remove("celebrate");
+  $("handResult").classList.remove("settlement-enter");
+}
+function countChips(element,from,to,duration) {
+  if(!element)return;
+  if(visualCounters.has(element))cancelAnimationFrame(visualCounters.get(element));
+  if(matchMedia("(prefers-reduced-motion: reduce)").matches) {element.textContent=num(to);return;}
+  const started=performance.now();
+  function frame(now) {
+    if(!element.isConnected) {visualCounters.delete(element);return;}
+    const progress=Math.min(1,(now-started)/duration), eased=1-Math.pow(1-progress,3);
+    element.textContent=num(Math.round(from+(to-from)*eased));
+    if(progress<1)visualCounters.set(element,requestAnimationFrame(frame));
+    else visualCounters.delete(element);
+  }
+  visualCounters.set(element,requestAnimationFrame(frame));
+}
+function playAnimation(element,frames,options) {
+  if(!element?.animate || matchMedia("(prefers-reduced-motion: reduce)").matches)return;
+  const animation=element.animate(frames,options);
+  visualAnimations.add(animation);
+  animation.finished.then(()=>visualAnimations.delete(animation),()=>visualAnimations.delete(animation));
+  return animation;
+}
+function animateChipGain(event) {
+  const seat=document.querySelector(`[data-player-id="${event.id}"]`);
+  if(!seat)return;
+  const gain=document.createElement("div");
+  gain.className="chip-gain";gain.setAttribute("aria-hidden","true");
+  gain.innerHTML=`<b>+${num(event.amount)}</b><small>${esc(event.label)}</small>`;
+  seat.append(gain);effectTimer(()=>gain.remove(),1900);
+  countChips(seat.querySelector(".seat-stack"),event.from,event.to,1250);
+  if(event.id===snapshot.me)countChips($("myStack"),event.from,event.to,1250);
+  playAnimation(seat.querySelector(".seat-info"),[{boxShadow:"0 0 0 0 #e2c47d00"},{boxShadow:"0 0 0 9px #e2c47d55",offset:.3},{boxShadow:"0 0 0 2px #e2c47d00"}],{duration:1800,easing:"ease-out"});
+  if(matchMedia("(prefers-reduced-motion: reduce)").matches)return;
+  const origin=(event.source==="pot" ? $("potLabel") : event.id===snapshot.me ? $("rebuyBtn") : document.querySelector(`[data-agent-id="${event.id}"]`))?.getBoundingClientRect();
+  const target=seat.querySelector(".seat-stack").getBoundingClientRect();
+  if(!origin || origin.bottom<0 || origin.top>innerHeight || target.bottom<0 || target.top>innerHeight)return;
+  const start={x:origin.left+origin.width/2,y:origin.top+origin.height/2};
+  const dx=target.left+target.width/2-start.x,dy=target.top+target.height/2-start.y;
+  for(let i=0;i<9;i++) {
+    const chip=document.createElement("i");chip.className="flying-chip";
+    chip.style.left=`${start.x+(i%3-1)*5}px`;chip.style.top=`${start.y}px`;
+    $("chipEffects").append(chip);
+    const animation=playAnimation(chip,[{transform:"translate(-50%,-50%) scale(.8)",opacity:0},{transform:`translate(${dx*.35}px,${dy*.35-32}px) rotate(80deg)`,opacity:1,offset:.4},{transform:`translate(${dx}px,${dy}px) rotate(180deg) scale(.45)`,opacity:0}],{duration:850,delay:i*55,easing:"cubic-bezier(.2,.7,.3,1)"});
+    if(animation)animation.finished.then(()=>chip.remove(),()=>chip.remove());else chip.remove();
+  }
+}
+function animateResult(previous,next) {
+  if(!previous || previous.code!==next.code || previous.hand_number!==next.hand_number)resetVisualEffects();
+  if(previous?.code===next.code && previous.hand_number===next.hand_number && previous.phase==="playing" && next.phase==="finished") {
+    $("tableWinner").classList.add("celebrate");$("handResult").classList.add("settlement-enter");
+    document.querySelectorAll(".showdown-hole .playing-card").forEach((el,i)=>{
+      playAnimation(el,[{transform:"rotateY(90deg)",opacity:0},{transform:"rotateY(0)",opacity:1}],{duration:500,delay:Math.min(i*60,500),easing:"ease-out"});
+    });
+    effectTimer(()=>{$("tableWinner").classList.remove("celebrate");$("handResult").classList.remove("settlement-enter");},2400);
+  }
+  for(const event of PokerResults.chipEvents(previous,next))animateChipGain(event);
 }
 function renderActions() {
   const me = myPlayer(), isHost = snapshot.me === snapshot.owner, active = snapshot.phase === "playing";
@@ -257,6 +354,7 @@ function updateEnabled() {
 function render(next) {
   // Ignore a slower GET response that predates an accepted local command.
   if (snapshot && next.version < snapshot.version) return;
+  const previous=snapshot;
   const changed = !snapshot || next.version !== snapshot.version;
   const justEnded = next.session_ended && !snapshot?.session_ended;
   if (!snapshot) {
@@ -279,11 +377,12 @@ function render(next) {
   $("playerCount").textContent = `${next.players.length} / ${next.settings.max_players}`;
   $("potLabel").innerHTML = next.phase === "playing" ? `底池 <b>${num(next.pot)}</b>` : next.phase === "finished" ? "本 手 结 算" : "等待玩家入席";
   $("myName").textContent = me.name;
-  $("myStack").textContent = num(me.stack);
+  if(changed || !visualCounters.has($("myStack")))$("myStack").textContent = num(me.stack);
   $("myBuyin").textContent = num(me.buyin);
   $("myNet").textContent = signed(me.stack-me.buyin);
   $("myNet").className = me.stack > me.buyin ? "positive" : me.stack < me.buyin ? "negative" : "";
-  renderSeats();
+  if(changed)renderSeats();
+  else for(const p of next.players)document.querySelector(`[data-player-id="${p.id}"] .seat-online`)?.classList.toggle("away",!p.online);
   if (changed) {
     $("board").innerHTML = Array.from({length:5},(_,i)=>card(next.board[i])).join("");
     renderLog();
@@ -294,7 +393,9 @@ function render(next) {
     savedSettings = settingsKey;
   }
   if(changed)renderAgents();
+  renderResult();
   renderActions(); updateClock();
+  animateResult(previous,next);
   $("summaryBtn").textContent = next.session_ended ? "赛后总结" : "整场统计";
   if (justEnded && !$("summaryDialog").open && !$("chatDialog").open) $("summaryDialog").showModal();
   if ($("summaryDialog").open && (changed || !sessionReport)) loadSummary();
