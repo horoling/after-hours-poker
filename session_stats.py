@@ -35,7 +35,8 @@ def sync_players(room):
             baseline_net=player["stack"] - player["buyin"],
             hands_played=0, hands_won=0, cashout=0,
         ))
-        record.update(name=player["name"], buyin=player["buyin"], stack=player["stack"])
+        record.update(name=player["name"], buyin=player["buyin"], stack=player["stack"],
+                      is_agent=bool(player.get("is_agent")))
 
 
 def hand_totals(state):
@@ -120,21 +121,23 @@ def csv_text(summary, detailed=False):
                          else v for v in values])
 
     if detailed:
-        row(["房间", "手数", "结算时间UTC", "底池", "公共牌", "入座编号", "玩家ID", "昵称", "本手盈亏", "累计盈亏", "本手获池"])
+        row(["房间", "手数", "结算时间UTC", "底池", "公共牌", "入座编号", "玩家ID", "昵称", "本手盈亏", "累计盈亏", "本手获池", "玩家类型"])
         entries = {p["id"]: p["entry"] for p in summary["players"]}
+        types = {p["id"]: "Agent" if p.get("is_agent") else "真人" for p in summary["players"]}
         for hand in summary["hands"]:
             for result in hand["results"]:
                 row([summary["code"], hand["number"], iso(hand["ended_at"]), hand["pot"],
                      " ".join(hand["board"]), entries[result["id"]], result["id"],
-                     result["name"], result["delta"], result["net"], int(result["won"])])
+                     result["name"], result["delta"], result["net"], int(result["won"]), types[result["id"]]])
     else:
         row(["房间", "账单状态", "开始时间UTC", "结束时间UTC", "时长秒（含暂停）", "统计起始手", "历史不完整", "已结算手数", "最大底池", "最大底池手数",
-             "入座编号", "玩家ID", "昵称", "玩家状态", "累计买入", "桌上筹码", "离桌带出", "净盈亏", "参与手数", "获胜手数"])
+             "入座编号", "玩家ID", "昵称", "玩家状态", "累计买入", "桌上筹码", "离桌带出", "净盈亏", "参与手数", "获胜手数", "玩家类型"])
         for player in summary["players"]:
             row([summary["code"], "最终" if summary["ended_at"] is not None else "进行中快照", iso(summary["started_at"]),
                  iso(summary["ended_at"]), summary["elapsed_seconds"], summary["first_hand"], int(summary["legacy"]),
                  summary["completed_hands"], summary["largest_pot"]["pot"] if summary["largest_pot"] else "",
                  summary["largest_pot"]["number"] if summary["largest_pot"] else "",
                  player["entry"], player["id"], player["name"], player["status"], player["buyin"],
-                 player["stack"], player["cashout"], player["net"], player["hands_played"], player["hands_won"]])
+                 player["stack"], player["cashout"], player["net"], player["hands_played"], player["hands_won"],
+                 "Agent" if player.get("is_agent") else "真人"])
     return "\ufeff" + out.getvalue()

@@ -22,8 +22,12 @@ data/
 /Negreanu大师课笔记/
 /README-training.local.md
 
-# The GitHub project contains the multiplayer app only.
-/engine/
+# Only the reusable training strategy is part of the multiplayer project.
+/engine/*
+!/engine/__init__.py
+!/engine/bots.py
+!/engine/hands.py
+!/engine/preflop_equity.json
 /server.py
 /web/*
 !/web/friends.html

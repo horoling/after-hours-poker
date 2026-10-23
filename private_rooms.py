@@ -19,6 +19,7 @@ import time
 from flask import Blueprint, Response, current_app, jsonify, request
 from pokerkit import Automation, Card, Deck, NoLimitTexasHoldem
 from session_stats import csv_text, ensure_session, record_settlement, session_summary, sync_players
+from room_agents import choose_action
 
 rooms = Blueprint("private_rooms", __name__)
 AUTOMATIONS = tuple(a for a in Automation if a not in (
@@ -28,6 +29,7 @@ STREETS = ["翻牌前", "翻牌", "转牌", "河牌"]
 MAX_PLAYERS = 11
 CHAT_LIMIT = 200
 CHAT_MESSAGE_LENGTH = 300
+AGENT_THINK_SECONDS = 1.2
 
 
 def hand_positions(hand):
@@ -164,7 +166,7 @@ def member(room):
     token = auth[7:] if auth.startswith("Bearer ") else ""
     hashed = digest(token)
     for p in room["players"]:
-        if secrets.compare_digest(p["token_hash"], hashed):
+        if not p.get("is_agent") and secrets.compare_digest(p["token_hash"], hashed):
             p["seen"] = time.time()
             return p
     raise RoomError("请使用邀请链接加入，或回到原来的浏览器恢复座位。", 401)
@@ -246,9 +248,11 @@ def set_deadline(room):
     seconds = room["settings"]["turn_seconds"]
     room["hand"].pop("remaining", None)
     room["hand"]["deadline"] = time.time() + seconds if seconds else None
+    room["hand"].pop("agent_remaining", None)
+    room["hand"]["agent_due"] = time.time() + AGENT_THINK_SECONDS
 
 
-def record_action(room, state, kind, amount=None, automatic=False):
+def record_action(room, state, kind, amount=None, automatic=False, agent=False):
     hand = room["hand"]
     actor = state.actor_index
     seat = hand["seats"][actor]
@@ -256,7 +260,7 @@ def record_action(room, state, kind, amount=None, automatic=False):
     call = state.checking_or_calling_amount
     apply_action(state, kind, amount)
     hand["actions"].append(dict(kind=kind, amount=amount, seat=seat,
-                                street=street, automatic=automatic,
+                                street=street, automatic=automatic, agent=agent,
                                 label=("弃牌" if kind == "fold" else
                                        f"加注至 {amount}" if kind == "raise" else
                                        f"跟注 {call}" if call else "过牌")))
@@ -271,11 +275,34 @@ def tick(room):
     if hand is None:
         return None
     state = build_state(hand)
-    if (state.status and not room["paused"] and hand["deadline"] is not None
+    actor = (next(p for p in room["players"] if p["seat"] == hand["seats"][state.actor_index])
+             if state.actor_index is not None else None)
+    if (state.status and not room["paused"] and not (actor or {}).get("is_agent") and hand["deadline"] is not None
             and time.time() >= hand["deadline"]):
         kind = "call" if state.checking_or_calling_amount == 0 else "fold"
         record_action(room, state, kind, automatic=True)
     return state
+
+
+def agent_task(room, state):
+    """Copy the actor's permitted information; never pass the room/deck to AI."""
+    if not state or not state.status or room["paused"]:
+        return None
+    hand, i = room["hand"], state.actor_index
+    seat = hand["seats"][i]
+    player = next(p for p in room["players"] if p["seat"] == seat)
+    if not player.get("is_agent") or time.time() < hand.get("agent_due", 0):
+        return None
+    observation = dict(hand=[repr(c) for c in state.hole_cards[i]],
+                       board=[repr(c) for c in state.get_board_cards(0)],
+                       opponents=[s for j, s in enumerate(hand["seats"]) if j != i and state.statuses[j]],
+                       n_players=len(hand["seats"]), pot=state.total_pot_amount,
+                       bet=state.bets[i], stack=state.stacks[i], big_blind=hand["bb"],
+                       preflop_pos=(i - (1 if len(hand["seats"]) == 2 else 2)) % len(hand["seats"]),
+                       options=betting_options(state),
+                       actions=[{k: a[k] for k in ("seat", "street", "kind", "amount")} for a in hand["actions"]])
+    seed = int(hashlib.sha256(f'{player["token_hash"]}:{hand["number"]}:{len(hand["actions"])}'.encode()).hexdigest()[:8], 16)
+    return dict(version=room["version"], observation=observation, seed=seed)
 
 
 def view(room, player, state=None):
@@ -288,7 +315,7 @@ def view(room, player, state=None):
     seats = []
     for p in sorted(room["players"], key=lambda x: x["seat"]):
         item = {k: p[k] for k in ("id", "name", "seat", "stack", "buyin")}
-        item.update(online=time.time() - p["seen"] < 20, cards=[], bet=0,
+        item.update(is_agent=bool(p.get("is_agent")), online=bool(p.get("is_agent")) or time.time() - p["seen"] < 20, cards=[], bet=0,
                     status="等待入局", delta=None, position=None)
         i = seat_to_index.get(p["seat"])
         if hand and hand["player_ids"].get(str(p["seat"])) != p["id"]:
@@ -397,7 +424,23 @@ def join_room(code):
 def room_state(code):
     with transaction(code) as (_, room):
         player = member(room)
-        result = view(room, player, tick(room))
+        state = tick(room)
+        task = agent_task(room, state)
+        result = view(room, player, state)
+    if task:
+        # Monte Carlo runs outside SQLite's write lock. Concurrent polls may
+        # compute the same choice; only the unchanged version can commit it.
+        try:
+            action = choose_action(task["observation"], task["seed"])
+        except Exception:
+            current_app.logger.exception("Agent strategy failed; using check/fold for this turn")
+            action = dict(kind="call" if task["observation"]["options"]["call"] == 0 else "fold", amount=None)
+        with transaction(code) as (_, room):
+            player = member(room)
+            state = tick(room)
+            if room["version"] == task["version"] and not room["paused"]:
+                record_action(room, state, action["kind"], action["amount"], agent=True)
+            result = view(room, player, state)
     return jsonify(result)
 
 
@@ -546,10 +589,47 @@ def room_command(code, command):
             hand = room["hand"]
             if room["paused"]:
                 hand["deadline"] = time.time() + hand.pop("remaining") if hand.get("remaining") is not None else None
+                hand["agent_due"] = time.time() + hand.pop("agent_remaining", AGENT_THINK_SECONDS)
             else:
                 hand["remaining"] = max(0, hand["deadline"] - time.time()) if hand["deadline"] else None
                 hand["deadline"] = None
+                hand["agent_remaining"] = max(0, hand.get("agent_due", time.time()) - time.time())
             room["paused"] = not room["paused"]
+            room["version"] += 1
+        elif command in ("add_agent", "remove_agent", "rebuy_agent"):
+            host(room, player)
+            if active:
+                raise RoomError("请在两手之间管理 Agent 玩家。", 409)
+            if data.get("version") != room["version"]:
+                raise RoomError("牌桌已更新，请重试。", 409)
+            if command == "add_agent":
+                count = integer(data.get("count", 1), "Agent 数量", 1, MAX_PLAYERS - 1)
+                capacity = room["settings"]["max_players"]
+                if len(room["players"]) + count > capacity:
+                    raise RoomError("空位不足，请减少数量或先扩大牌桌。", 409)
+                for _ in range(count):
+                    seat = next(i for i in range(capacity) if not any(p["seat"] == i for p in room["players"]))
+                    number = 1
+                    while any(p["name"] == f"Agent {number}" for p in room["players"]):
+                        number += 1
+                    agent, _ = new_player(f"Agent {number}", seat, room["settings"]["starting_stack"])
+                    agent["is_agent"] = True
+                    room["players"].append(agent)
+            else:
+                agent = next((p for p in room["players"] if p["id"] == data.get("agent_id") and p.get("is_agent")), None)
+                if agent is None:
+                    raise RoomError("Agent 座位不存在。", 404)
+                if command == "rebuy_agent":
+                    amount = room["settings"]["starting_stack"]
+                    if agent["stack"] + amount > 100000000:
+                        raise RoomError("筹码已达到上限。")
+                    agent["stack"] += amount
+                    agent["buyin"] += amount
+                else:
+                    sync_players(room)
+                    room["session"]["participants"][agent["id"]].update(left_at=time.time(), cashout=agent["stack"], stack=0)
+                    room["players"].remove(agent)
+            sync_players(room)
             room["version"] += 1
         elif command == "rename":
             player["name"] = nickname(data.get("name"))
@@ -575,7 +655,7 @@ def room_command(code, command):
                 record.update(left_at=time.time(), cashout=player["stack"], stack=0)
             room["players"].remove(player)
             if player["id"] == room["owner"]:
-                room["owner"] = room["players"][0]["id"] if room["players"] else None
+                room["owner"] = next((p["id"] for p in room["players"] if not p.get("is_agent")), None)
             room["version"] += 1
             return jsonify(left=True)
         elif command == "end":

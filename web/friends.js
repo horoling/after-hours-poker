@@ -101,7 +101,7 @@ function renderSeats() {
     return `<div class="seat${mine ? " mine" : ""}${turn ? " turn" : ""}${p.status === "已弃牌" ? " folded" : ""}" style="left:${x}%;top:${y}%">
       ${p.bet ? `<span class="seat-bet">● ${num(p.bet)}</span>` : ""}
       ${snapshot.dealer === seat && snapshot.hand_number ? '<span class="dealer" title="庄家">D</span>' : ""}
-      <div class="seat-info">${p.position ? `<div class="seat-position" title="${esc(POSITION_NAMES[p.position] || p.position)}">${esc(p.position)}</div>` : ""}<div class="seat-name"><i class="seat-online${p.online ? "" : " away"}"></i>${esc(p.name)}${mine ? ' <span class="you">你</span>' : ""}${p.id === snapshot.owner ? " ♛" : ""}</div><div class="seat-stack">${num(p.stack)}</div><div class="seat-status">${esc(snapshot.phase === "lobby" ? "已入座" : lastActions.get(seat) || status)}${esc(delta)}</div>${turn && snapshot.turn_timer?.enabled ? '<div id="seatClock" class="seat-clock"><span id="seatTimerValue"></span><div class="countdown-track"><i></i></div></div>' : ""}</div>
+      <div class="seat-info">${p.position ? `<div class="seat-position" title="${esc(POSITION_NAMES[p.position] || p.position)}">${esc(p.position)}</div>` : ""}<div class="seat-name"><i class="seat-online${p.online ? "" : " away"}"></i>${esc(p.name)}${mine ? ' <span class="you">你</span>' : ""}${p.id === snapshot.owner ? " ♛" : ""}</div>${p.is_agent ? '<div class="seat-agent">AGENT</div>' : ""}<div class="seat-stack">${num(p.stack)}</div><div class="seat-status">${esc(snapshot.phase === "lobby" ? "已入座" : lastActions.get(seat) || status)}${esc(delta)}</div>${turn && snapshot.turn_timer?.enabled ? '<div id="seatClock" class="seat-clock"><span id="seatTimerValue"></span><div class="countdown-track"><i></i></div></div>' : ""}</div>
       <div class="seat-cards">${snapshot.phase === "lobby" || p.status === "等待入局" ? "" : p.cards.length ? p.cards.map(c => card(c)).join("") : card(null,true)+card(null,true)}</div>
     </div>`;
   }).join("");
@@ -113,7 +113,7 @@ function renderLog() {
   const html = snapshot.actions.map(a => {
     const street = a.street !== previousStreet ? `<div class="log-street">${labels[a.street]}</div>` : "";
     previousStreet = a.street;
-    return `${street}<div class="log-row"><b>${esc(players.get(a.seat) || `座位 ${a.seat+1}`)}</b><span>${esc(a.label)}${a.automatic ? " · 超时" : ""}</span></div>`;
+    return `${street}<div class="log-row"><b>${esc(players.get(a.seat) || `座位 ${a.seat+1}`)}</b><span>${esc(a.label)}${a.agent ? " · Agent" : a.automatic ? " · 超时" : ""}</span></div>`;
   }).join("");
   $("actionLog").innerHTML = html || (snapshot.phase === "lobby" ? "把链接发给朋友，入座后由房主开局。" : "底牌已发出，等待第一位玩家行动。");
   $("actionLog").scrollTop = $("actionLog").scrollHeight;
@@ -158,6 +158,20 @@ function renderActions() {
   $("rebuyBtn").textContent = `补码 +${num(snapshot.settings.starting_stack)}`;
   $("settingsForm").querySelectorAll("input,select,button").forEach(el => { el.disabled = active || snapshot.session_ended; });
   updateEnabled();
+}
+
+function renderAgents() {
+  const isHost=snapshot.me===snapshot.owner, agents=snapshot.players.filter(p=>p.is_agent);
+  hide("agentPanel", !isHost && agents.length===0);
+  hide("agentForm", !isHost);
+  $("agentList").innerHTML=agents.map(p=>`<div class="agent-row"><div><b>${esc(p.name)}</b><small>座位 ${p.seat+1} · ${num(p.stack)} 筹码</small></div>${isHost ? `<div class="agent-controls"><button type="button" class="text-button" data-agent-command="rebuy_agent" data-agent-id="${esc(p.id)}" aria-label="给 ${esc(p.name)} 补码">补码</button><button type="button" class="text-button" data-agent-command="remove_agent" data-agent-id="${esc(p.id)}" aria-label="移除 ${esc(p.name)}">移除</button></div>` : '<span class="agent-badge">AGENT</span>'}</div>`).join("") || '<p class="micro">还没有 Agent，可添加到空座位陪你们玩。</p>';
+  const available=snapshot.settings.max_players-snapshot.players.length, select=$("agentCount");
+  if(select.options.length!==available) {
+    const selected=Number(select.value)||1;
+    select.innerHTML=Array.from({length:available},(_,i)=>`<option value="${i+1}">${i+1} 位</option>`).join("");
+    select.value=Math.min(selected,available);
+  }
+  $("agentHint").textContent=snapshot.session_ended ? "本场已结束，Agent 账目已保留。" : snapshot.phase==="playing" ? "本手进行中；两手之间可添加、移除或补码。" : !isHost ? "由房主在两手之间管理 Agent。" : available ? `还有 ${available} 个空位。Agent 使用本桌买入，补码由房主操作。` : "座位已满，可先移除 Agent 为朋友留位，或扩大牌桌。";
 }
 
 function renderSizing(forceAmount = false) {
@@ -231,6 +245,10 @@ function updateEnabled() {
   $("renameBtn").disabled = blocked || snapshot.session_ended;
   $("endSessionBtn").disabled = $("confirmEnd").disabled = blocked || active || snapshot.session_ended;
   $("pauseBtn").disabled = blocked;
+  const agentBlocked=blocked || active || snapshot.session_ended || snapshot.me!==snapshot.owner;
+  $("agentCount").disabled=agentBlocked || snapshot.players.length>=snapshot.settings.max_players;
+  $("addAgentBtn").disabled=$("agentCount").disabled;
+  $("agentList").querySelectorAll("button").forEach(button=>{button.disabled=agentBlocked;});
   updateChatControls();
 }
 function render(next) {
@@ -272,6 +290,7 @@ function render(next) {
     for (const [key,value] of Object.entries(next.settings)) $("settingsForm").elements[key].value = value;
     savedSettings = settingsKey;
   }
+  if(changed)renderAgents();
   renderActions(); updateClock();
   $("summaryBtn").textContent = next.session_ended ? "赛后总结" : "整场统计";
   if (justEnded && !$("summaryDialog").open && !$("chatDialog").open) $("summaryDialog").showModal();
@@ -482,7 +501,7 @@ function renderSummary() {
   $("sessionBuyin").textContent = num(r.total_buyin);
   $("sessionTimes").textContent = `${r.legacy ? "统计起算" : "开始"}：${reportDate(r.started_at)}${ended ? `　结束：${reportDate(r.ended_at)}` : "　从第一手起计时，含暂停"}`;
   $("rankingTitle").textContent = ended ? "全桌最终盈亏榜" : "全桌当前盈亏榜";
-  $("rankingRows").innerHTML = r.players.map((p,i)=>`<tr><th scope="row"><span class="rank-number">${i+1}</span>${esc(p.name)}${p.id === snapshot.me ? ' <small>你</small>' : ""}<small>#${p.entry} · ${esc(p.status)}</small></th><td class="${p.net>0 ? "positive" : p.net<0 ? "negative" : ""}">${signed(p.net)}</td><td>${num(p.buyin)}</td><td>${num(p.left_at != null ? p.cashout : p.stack)}<small>${p.left_at != null ? "离桌带出" : "桌上筹码"}</small></td><td>${num(p.hands_played)}</td><td>${num(p.hands_won)}</td></tr>`).join("");
+  $("rankingRows").innerHTML = r.players.map((p,i)=>`<tr><th scope="row"><span class="rank-number">${i+1}</span>${esc(p.name)}${p.id === snapshot.me ? ' <small>你</small>' : ""}<small>#${p.entry} · ${p.is_agent ? "Agent · " : ""}${esc(p.status)}</small></th><td class="${p.net>0 ? "positive" : p.net<0 ? "negative" : ""}">${signed(p.net)}</td><td>${num(p.buyin)}</td><td>${num(p.left_at != null ? p.cashout : p.stack)}<small>${p.left_at != null ? "离桌带出" : "桌上筹码"}</small></td><td>${num(p.hands_played)}</td><td>${num(p.hands_won)}</td></tr>`).join("");
   $("accountingCheck").textContent = `买入 ${num(r.total_buyin)} · 桌上及离桌带出 ${num(r.total_chips)} · 全桌净盈亏 ${signed(r.net_total)}${r.net_total === 0 ? " · 账目平衡" : r.legacy ? " · 旧记录可能缺少此前离桌玩家" : " · 请核对账目"}`;
   const largest = r.largest_pot;
   $("largestPotDetail").innerHTML = largest ? `<div class="largest-pot-title">第 ${largest.number} 手 <b>${num(largest.pot)} 筹码</b></div><div class="report-board">${largest.board.map(c=>card(c)).join("") || '<span class="muted">未发公共牌</span>'}</div><p>${largest.results.map(p=>`${esc(p.name)} <b class="${p.delta>0 ? "positive" : p.delta<0 ? "negative" : ""}">${signed(p.delta)}</b>`).join("　")}</p>` : '<p class="muted">完成第一手后，这里会记录最大底池。</p>';
@@ -673,6 +692,11 @@ document.addEventListener("keydown",event=>{
   if (action) {event.preventDefault();action();}
 });
 $("pauseBtn").addEventListener("click",()=>send("pause"));
+$("agentForm").addEventListener("submit",event=>{event.preventDefault();send("add_agent",{count:Number($("agentCount").value)});});
+$("agentList").addEventListener("click",event=>{
+  const button=event.target.closest("[data-agent-command]");
+  if(button && !button.disabled)send(button.dataset.agentCommand,{agent_id:button.dataset.agentId});
+});
 $("rebuyBtn").addEventListener("click",()=>send("rebuy"));
 $("leaveBtn").addEventListener("click",()=>send("leave"));
 $("renameBtn").addEventListener("click",()=>{$("newName").value=myPlayer().name;$("nameDialog").showModal();});

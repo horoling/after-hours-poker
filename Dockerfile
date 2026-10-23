@@ -2,7 +2,8 @@ FROM python:3.13-slim
 WORKDIR /app
 COPY requirements-multiplayer.txt ./
 RUN pip install --no-cache-dir -r requirements-multiplayer.txt
-COPY private_rooms.py multiplayer_app.py session_stats.py ./
+COPY private_rooms.py multiplayer_app.py session_stats.py room_agents.py ./
+COPY engine/__init__.py engine/bots.py engine/hands.py engine/preflop_equity.json ./engine/
 COPY web/friends.html web/friends.css web/friends.js ./web/
 RUN useradd --uid 10001 --create-home poker && mkdir /data && chown poker:poker /data
 USER poker

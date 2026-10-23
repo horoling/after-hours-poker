@@ -4,6 +4,12 @@
 !private_rooms.py
 !multiplayer_app.py
 !session_stats.py
+!room_agents.py
+!engine/
+!engine/__init__.py
+!engine/bots.py
+!engine/hands.py
+!engine/preflop_equity.json
 !web/
 !web/friends.html
 !web/friends.css
